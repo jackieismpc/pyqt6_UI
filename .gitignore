@@ -28,3 +28,8 @@ charuco_*.png
 check_mvs_api.ps1
 debug_windows_pyqt6.ps1
 find_mvs.ps1
+
+# SAM2 第三方仓库：仅保留核心 Python 包（sam2/sam2/），排除 demo/notebook/数据集
+backend/third_party/sam2/notebooks/
+backend/third_party/sam2/demo/
+backend/third_party/sam2/sav_dataset/
