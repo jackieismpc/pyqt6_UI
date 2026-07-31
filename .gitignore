@@ -1,0 +1,30 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# macOS / Windows system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 保存的推理结果（以数字日期命名）
+/assets/[0-9]*/
+
+# 大型测试数据（视频、原始采集数据）— 不纳入版本控制
+backend/data/inputs/*
+backend/data/raw/*
+
+# 临时标定文件
+charuco_*.png
+
+# Windows 调试脚本
+check_mvs_api.ps1
+debug_windows_pyqt6.ps1
+find_mvs.ps1

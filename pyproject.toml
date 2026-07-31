@@ -1,0 +1,46 @@
+[project]
+name = "crystal-vol-ui"
+version = "0.2.0"
+description = "透明晶体体积估计：PyQt6 可视化前端 + crystalvol 算法后端（统一 uv 管理）"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    # ---- 前端 UI ----
+    "pyqt6>=6.11.0",
+    "pyqt6-stubs>=20250824",
+
+    # ---- 图像 / 数值基础 ----
+    # 后端 edges.py 用到 cv2.ximgproc / LineSegmentDetector，必须是 contrib 版；
+    # 与 opencv-python 互斥，全项目只装这一个。
+    "opencv-contrib-python>=4.10.0",
+    "numpy",
+    "scipy",
+    "scikit-image",
+    "pillow>=12.3.0",
+    "pyyaml",
+
+    # ---- 深度学习后端（PyTorch，macOS 走 CPU/MPS）----
+    "torch>=2.5.1",
+    "torchvision",
+
+    # ---- 分割前端：YOLO-World + SAM2 ----
+    "ultralytics",
+    "hydra-core",
+    "iopath",
+    "SAM-2",
+
+    # ---- 深度边缘前端：PiDiNet / HED（权重首次运行自动从 HuggingFace 下载）----
+    "controlnet-aux",
+    "huggingface-hub",
+    "einops",
+    "socksio",
+]
+
+[tool.uv]
+# 本项目以「应用」方式运行（python main.py），不需要把根目录本身打成 wheel。
+package = false
+
+[tool.uv.sources]
+# SAM2 以源码可编辑方式接入（源码在 backend/third_party/sam2）。
+# macOS 上安装时请设 SAM2_BUILD_CUDA=0，见 README「统一环境安装」。
+sam-2 = { path = "backend/third_party/sam2", editable = true }
