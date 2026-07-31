@@ -6,7 +6,7 @@
 
 前端三个并排图像面板（原始输入 / 预处理后 / 几何模型）+ 顶部输入控制栏 + 底部体积与置信度结果栏，
 浅色主题。**后端算法已真正接入**：前端在后台线程内直接调用 `crystalvol` 做真实推理，
-不再使用示例占位数据（启动时仍会展示一份 `assets/example/` 示例，方便未选输入时先看效果）。
+默认启动为空白面板，选择输入后开始推理。
 
 ---
 
@@ -26,9 +26,7 @@ pyqt6_UI/
 │   ├── result_bar.py           结果栏：体积、置信度、帧切换
 │   ├── models.py               数据模型 Stage1Result / FrameResult + 置信度公式
 │   ├── widgets.py / theme.py   通用控件与浅色主题
-├── assets/
-│   ├── example/                启动演示用示例产物（一次真实运行留档）
-│   └── <日期-时间>/            勾选「保存结果」后每次推理的产物目录（gitignore）
+├── assets/<日期-时间>/         勾选「保存结果」后每次推理的产物目录（gitignore）
 └── backend/                    —— crystalvol 算法后端 ——
     ├── run.py                  命令行入口（也可独立使用）
     ├── crystalvol/             核心包（预处理/边缘/分割/线框/几何/编排/会话…）
@@ -51,6 +49,29 @@ pyqt6_UI/
 
 全项目只有一个 uv 环境，前端（PyQt6）与后端（torch / SAM2 / ultralytics / controlnet_aux …）
 都装在里面。Python 版本为 **3.13**（见 `.python-version`）。
+
+### 0. 获取代码（所有平台通用）
+
+本仓库使用 **Git LFS** 管理模型权重文件（约 214 MB），请先安装 Git LFS 再克隆：
+
+```bash
+# 安装 Git LFS（仅需一次）
+# macOS:
+brew install git-lfs
+# Ubuntu/Debian:
+sudo apt install git-lfs
+# Windows: 从 https://git-lfs.com 下载安装包
+
+# 初始化 LFS
+git lfs install
+
+# 克隆仓库（LFS 文件会自动下载）
+git clone <仓库地址>
+cd pyqt6_UI
+```
+
+> **如果 LFS 下载失败或耗时过长**（网络受限等），克隆后 `backend/weights/` 下的 `.pt`/`.pth` 文件
+> 可能是 LFS 指针（仅几百字节），需要手动下载权重文件。见下方 [LFS 备用方案](#lfs-备用方案手动权重拷贝)。
 
 ### macOS
 
@@ -207,9 +228,10 @@ uv run python main.py
 
 - `SAM2_BUILD_CUDA=0` 让 SAM2 以纯 Python 方式可编辑安装（源码在 `backend/third_party/sam2`）；
   非 CUDA 环境必须设置，否则 `uv sync` 构建 SAM2 时会报错。
-- **SAM2 / YOLO-World 权重**已随工程放在 `backend/weights/`，无需另外下载。
-- **深度边缘权重（PiDiNet）** 会在首次真实运行时自动从 HuggingFace 下载（约 2–3 MB）并缓存；
-  离线或下载失败时，边缘提取会自动回退到 Canny，流程不中断。
+- **模型权重**（SAM2 / YOLO-World / PiDiNet / ControlNet-HED）放在 `backend/weights/`，通过 Git LFS 管理。
+  正常 `git clone` 即自动下载（约 214 MB）。若 LFS 下载失败，见下方 [LFS 备用方案](#lfs-备用方案手动权重拷贝)。
+- **深度边缘权重（PiDiNet）** 已在 `backend/weights/` 中随附，但首次运行仍会从 HuggingFace 下载
+  校验表头文件（约 2–3 MB）；离线或下载失败时，边缘提取会自动回退到 Canny，流程不中断。
 - 设备：macOS/Linux 默认 CPU；SAM2 在 Apple MPS 上有个别算子未实现，代码里已自动把 SAM2 降级到 CPU
   跑（ROI 裁剪后目标很小，CPU 上 SAM2-tiny 足够快）。
 - **Linux 中文显示**：Ubuntu 需要安装中文字体，否则界面中文会乱码：
@@ -242,6 +264,32 @@ uv run python main.py
 
 > 提示：若新机器联网受限，PiDiNet 权重下载会失败，但不影响运行——边缘会自动回退 Canny。
 
+### LFS 备用方案：手动权重拷贝
+
+如果 `git clone` 时 LFS 下载失败（`.pt`/`.pth` 文件仅 1–2 KB 即为失败），
+或网络条件不允许 LFS 传输，可以从已有安装的机器上手动复制权重：
+
+**需要复制的文件**（位于 `backend/weights/`，共 4 个，约 214 MB）：
+
+| 文件 | 大小 | 用途 |
+|------|------|------|
+| `sam2.1_hiera_tiny.pt` | 156 MB | SAM2 视频分割模型 |
+| `yolov8s-worldv2.pt` | 26 MB | YOLO-World 目标检测 |
+| `ControlNetHED.pth` | 29 MB | HED 边缘检测 |
+| `table5_pidinet.pth` | 2.9 MB | PiDiNet 深度边缘检测 |
+
+**操作步骤**：
+
+```bash
+# 从源机器（有权重的）复制到目标机器：
+scp backend/weights/*.pt backend/weights/*.pth user@target:/path/to/pyqt6_UI/backend/weights/
+
+# 或用 U 盘/移动硬盘拷到目标机器的 pyqt6_UI/backend/weights/ 目录下
+```
+
+复制完成后，`uv sync && uv run python main.py` 即可正常使用。
+缺少这些权重文件时，应用启动不会报错，但在运行推理时会在对应步骤失败。
+
 ---
 
 ## 前端使用方法
@@ -263,7 +311,7 @@ uv run python main.py
 
 **保存结果**：控制栏的「保存结果」勾选框，**默认不保存**（产物写入临时目录，用完即弃）。
 勾选后本次推理产物保存到 `assets/<日期-时间>/`（如 `assets/20260715-143022/`）长期留档；
-示例目录 `assets/example` 不受影响，保存的时间戳目录默认被 gitignore。
+时间戳目录默认被 gitignore。
 
 **等待态**：真实推理耗时（数秒到数十秒），推理在后台线程进行，期间对应面板显示「推理中…」，
 界面不会卡死；完成后自动填充结果。
