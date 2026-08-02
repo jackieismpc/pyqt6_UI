@@ -233,6 +233,20 @@ class CrystalSegmenter:
             warnings=warnings,
         )
 
+    def close(self) -> None:
+        """释放模型引用和设备缓存，供批处理/实时会话结束时调用。"""
+        self._sam2_predictor = None
+        self._world_model = None
+        if torch is not None:
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                if hasattr(torch, "mps") and torch.mps.is_available():
+                    torch.mps.empty_cache()
+            except Exception:
+                # 清理失败不应覆盖主流程结果；Python/torch 后续仍会回收对象。
+                pass
+
 
 class _NullCtx:
     def __enter__(self):

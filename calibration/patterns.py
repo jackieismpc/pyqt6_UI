@@ -71,7 +71,7 @@ class BoardSpec:
 class PatternDetection:
     object_points: np.ndarray
     image_points: np.ndarray
-    debug_image: np.ndarray
+    debug_image: Optional[np.ndarray]
     debug_info: dict[str, Any]
 
 
@@ -185,7 +185,11 @@ def board_metadata(spec: BoardSpec, dpi: int, margin_mm: float) -> dict[str, Any
     }
 
 
-def detect_pattern(image: np.ndarray, spec: BoardSpec) -> Optional[PatternDetection]:
+def detect_pattern(
+    image: np.ndarray,
+    spec: BoardSpec,
+    include_debug: bool = True,
+) -> Optional[PatternDetection]:
     spec.validate()
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
     if spec.pattern_type == "chessboard":
@@ -194,8 +198,10 @@ def detect_pattern(image: np.ndarray, spec: BoardSpec) -> Optional[PatternDetect
         if not found:
             return None
         image_points = corners.reshape(-1, 2).astype(np.float32)
-        debug = image.copy() if image.ndim == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        cv2.drawChessboardCorners(debug, spec.pattern_size, corners, True)
+        debug = None
+        if include_debug:
+            debug = image.copy() if image.ndim == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            cv2.drawChessboardCorners(debug, spec.pattern_size, corners, True)
         return PatternDetection(build_object_points(spec), image_points, debug, {"point_count": len(image_points)})
 
     if spec.pattern_type in {"circles_grid", "asymmetric_circles_grid"}:
@@ -208,8 +214,10 @@ def detect_pattern(image: np.ndarray, spec: BoardSpec) -> Optional[PatternDetect
         if not found:
             return None
         image_points = centers.reshape(-1, 2).astype(np.float32)
-        debug = image.copy() if image.ndim == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        cv2.drawChessboardCorners(debug, spec.pattern_size, centers, True)
+        debug = None
+        if include_debug:
+            debug = image.copy() if image.ndim == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            cv2.drawChessboardCorners(debug, spec.pattern_size, centers, True)
         return PatternDetection(build_object_points(spec), image_points, debug, {"point_count": len(image_points)})
 
     board = build_charuco_board(spec)
@@ -220,13 +228,15 @@ def detect_pattern(image: np.ndarray, spec: BoardSpec) -> Optional[PatternDetect
     object_points, image_points = board.matchImagePoints(charuco_corners, charuco_ids)
     object_points = np.asarray(object_points, dtype=np.float32).reshape(-1, 3)
     image_points = np.asarray(image_points, dtype=np.float32).reshape(-1, 2)
-    debug = image.copy() if image.ndim == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-    cv2.aruco.drawDetectedMarkers(debug, marker_corners, marker_ids.reshape(-1, 1))
-    cv2.aruco.drawDetectedCornersCharuco(
-        debug,
-        np.asarray(charuco_corners).reshape(-1, 1, 2),
-        np.asarray(charuco_ids).reshape(-1, 1),
-    )
+    debug = None
+    if include_debug:
+        debug = image.copy() if image.ndim == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        cv2.aruco.drawDetectedMarkers(debug, marker_corners, marker_ids.reshape(-1, 1))
+        cv2.aruco.drawDetectedCornersCharuco(
+            debug,
+            np.asarray(charuco_corners).reshape(-1, 1, 2),
+            np.asarray(charuco_ids).reshape(-1, 1),
+        )
     return PatternDetection(
         object_points,
         image_points,

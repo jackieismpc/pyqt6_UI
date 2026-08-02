@@ -419,4 +419,5 @@ class MainWindow(QMainWindow):
                 )
                 event.ignore()
                 return
+        self.backend.close()
         super().closeEvent(event)

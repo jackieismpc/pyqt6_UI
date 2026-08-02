@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import sys
 import tempfile
 from datetime import datetime
@@ -56,6 +57,7 @@ class BackendInterface:
         self._camera_config = camera_config or CameraConfig()
         self._camera_params = None
         self._realtime_previous_length_cm: float | None = None
+        self._temporary_output_dirs: set[Path] = set()
 
     @staticmethod
     def _load_backend_camera_parameters(parameter_path: str | None = None):
@@ -126,7 +128,21 @@ class BackendInterface:
                 output = self.RESULTS_DIR / f"{stamp}-{datetime.now().strftime('%f')[:3]}"
             output.mkdir(parents=True, exist_ok=True)
             return str(output)
-        return tempfile.mkdtemp(prefix=prefix)
+        path = Path(tempfile.mkdtemp(prefix=prefix))
+        self._temporary_output_dirs.add(path)
+        return str(path)
+
+    def _cleanup_temporary_outputs(self) -> None:
+        """清理本适配层创建的临时产物，避免长时间运行占满系统磁盘。"""
+        paths = list(self._temporary_output_dirs)
+        self._temporary_output_dirs.clear()
+        for path in paths:
+            try:
+                shutil.rmtree(path)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                logger.warning("临时结果目录清理失败: %s", path, exc_info=True)
 
     def _build_image_paths(self, base_dir: Path, name: str) -> dict:
         candidates = {
@@ -197,6 +213,7 @@ class BackendInterface:
         from crystalvol.stage1 import run_stage1  # noqa: WPS433
 
         options = options or {}
+        self._cleanup_temporary_outputs()
         output_dir = self._make_output_dir(bool(options.get("save")), "crystalvol_ui_")
         config = Stage1Config(
             input_path=str(input_path),
@@ -219,6 +236,7 @@ class BackendInterface:
         _ensure_backend_importable()
         from crystalvol.session import Stage1Session  # noqa: WPS433
 
+        self._cleanup_temporary_outputs()
         output_dir = self._make_output_dir(save, "crystalvol_rt_")
         self._session = Stage1Session(output_dir=output_dir, clean=True)
         self._realtime_previous_length_cm = None
@@ -245,5 +263,14 @@ class BackendInterface:
         return self._session.count if self._session is not None else 0
 
     def end_realtime_session(self) -> None:
+        if self._session is not None:
+            close = getattr(self._session, "close", None)
+            if close is not None:
+                close()
         self._session = None
         self._realtime_previous_length_cm = None
+
+    def close(self) -> None:
+        """应用退出时释放实时会话和未保存的临时产物。"""
+        self.end_realtime_session()
+        self._cleanup_temporary_outputs()

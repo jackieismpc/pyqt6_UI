@@ -31,7 +31,7 @@ def imread_safe(path: str | Path, flags: int = cv2.IMREAD_COLOR) -> Optional[np.
             data = np.frombuffer(fh.read(), dtype=np.uint8)
         img = cv2.imdecode(data, flags)
         return img if img is not None else None
-    except (OSError, ValueError, MemoryError):
+    except (OSError, ValueError, MemoryError, cv2.error):
         return None
 
 
@@ -50,7 +50,7 @@ def imwrite_safe(path: str | Path, image: np.ndarray, params=None) -> bool:
         with open(str(path), "wb") as fh:
             fh.write(data.tobytes())
         return True
-    except (OSError, ValueError):
+    except (OSError, ValueError, MemoryError, cv2.error):
         return False
 
 

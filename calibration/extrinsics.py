@@ -76,7 +76,12 @@ def calibrate_extrinsic(
     debug_output: str | Path | None = None,
 ) -> dict[str, Any]:
     image_file = Path(image_path).expanduser().resolve()
-    image = cv2.imread(str(image_file), cv2.IMREAD_COLOR)
+    try:
+        with image_file.open("rb") as handle:
+            encoded = np.frombuffer(handle.read(), dtype=np.uint8)
+        image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    except (OSError, ValueError, MemoryError, cv2.error) as exc:
+        raise RuntimeError(f"无法读取外参图片: {image_file} ({exc})") from exc
     if image is None:
         raise RuntimeError(f"无法读取外参图片: {image_file}")
     payload = load_parameters(parameters_path)

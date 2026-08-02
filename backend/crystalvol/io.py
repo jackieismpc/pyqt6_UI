@@ -39,7 +39,7 @@ def _imread(path: str, flags: int = cv2.IMREAD_COLOR):
             data = np.frombuffer(fh.read(), dtype=np.uint8)
         img = cv2.imdecode(data, flags)
         return img
-    except (OSError, ValueError):
+    except (OSError, ValueError, MemoryError, cv2.error):
         return None
 
 def _imwrite(path: str, img: np.ndarray) -> bool:
@@ -52,7 +52,7 @@ def _imwrite(path: str, img: np.ndarray) -> bool:
         with open(path, "wb") as fh:
             fh.write(data.tobytes())
         return True
-    except OSError:
+    except (OSError, ValueError, MemoryError, cv2.error):
         return False
 
 def _video_capture(path: str) -> cv2.VideoCapture:

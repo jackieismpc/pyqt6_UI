@@ -48,11 +48,12 @@ class Stage1Session:
         section("实时增量会话：初始化分割前端（仅一次）")
         self.segmenter: Optional[CrystalSegmenter] = build_segmenter(self.cfg)
         self.frame_outputs: List[FrameOutput] = []
+        self._total_count = 0
 
     @property
     def count(self) -> int:
         """已累积并成功处理的照片数。"""
-        return len(self.frame_outputs)
+        return self._total_count
 
     def add_frame(self, image_bgr: np.ndarray, name: Optional[str] = None) -> Dict[str, object]:
         """并入一张新照片，重新联合拟合，返回与 stage1 一致的 summary。
@@ -66,7 +67,7 @@ class Stage1Session:
         if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
             raise ValueError("传入的图像为空，无法加入会话。")
 
-        index = len(self.frame_outputs)
+        index = self._total_count
         frame_name = name or f"frame_{index + 1:02d}"
         image = _resize_max_side(image_bgr, self.cfg.max_input_side)
         frame = InputFrame(name=frame_name, image_bgr=image,
@@ -77,6 +78,12 @@ class Stage1Session:
         from .stage1 import _release_frame_buffers
         _release_frame_buffers(out)
         self.frame_outputs.append(out)
+        self._total_count += 1
+        max_frames = max(int(self.cfg.max_session_frames), 1)
+        if len(self.frame_outputs) > max_frames:
+            # 历史产物文件保留在 data/results 供追溯，但只保留最近窗口参与
+            # 联合拟合，防止实时会话的 CPU/元数据成本无限增长。
+            del self.frame_outputs[:-max_frames]
 
         summary = finalize_stage1(self.cfg, self.layout, self.frame_outputs)
         log(f"实时增量：已并入第 {self.count} 张，联合体积 "
@@ -86,4 +93,12 @@ class Stage1Session:
     def reset(self, clean: bool = True) -> None:
         """清空累积帧（开始对一个新晶体建模）；分割器常驻不重建。"""
         self.frame_outputs.clear()
+        self._total_count = 0
         self.layout.prepare(clean=clean)
+
+    def close(self) -> None:
+        """结束会话并释放分割模型和历史元数据。"""
+        self.frame_outputs.clear()
+        if self.segmenter is not None:
+            self.segmenter.close()
+            self.segmenter = None

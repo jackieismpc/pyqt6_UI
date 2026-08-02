@@ -190,24 +190,36 @@ def run_stage1(cfg: Stage1Config) -> Dict[str, object]:
     frame_outputs: List[FrameOutput] = []
     failed_frames: list[dict[str, str]] = []
     processed_count = 0
-    for frame in frames:
-        try:
-            out = _process_frame(frame, cfg, segmenter)
-            write_frame_products(layout, out)
-            _release_frame_buffers(out)
-        except Exception as exc:  # noqa: BLE001
-            # 单帧异常不应让整批任务崩溃；保留错误并继续处理后续视图。
-            failed_frames.append({"name": frame.name, "error": f"{type(exc).__name__}: {exc}"})
-            warn(f"[{frame.name}] 单帧处理失败，跳过并继续：{exc}")
-            continue
-        frame_outputs.append(out)
-        processed_count += 1
+    try:
+        for frame in frames:
+            try:
+                out = _process_frame(frame, cfg, segmenter)
+                write_frame_products(layout, out)
+                _release_frame_buffers(out)
+            except Exception as exc:  # noqa: BLE001
+                # 单帧异常不应让整批任务崩溃；保留错误并继续处理后续视图。
+                failed_frames.append({"name": frame.name, "error": f"{type(exc).__name__}: {exc}"})
+                warn(f"[{frame.name}] 单帧处理失败，跳过并继续：{exc}")
+                frame.image_bgr = None
+                continue
+            frame_outputs.append(out)
+            processed_count += 1
+    except Exception:
+        if segmenter is not None:
+            segmenter.close()
+        raise
 
     if not frame_outputs:
         details = "；".join(f"{item['name']}: {item['error']}" for item in failed_frames)
+        if segmenter is not None:
+            segmenter.close()
         raise RuntimeError(f"所有输入帧均处理失败。{details}")
 
-    summary = finalize_stage1(cfg, layout, frame_outputs)
+    try:
+        summary = finalize_stage1(cfg, layout, frame_outputs)
+    finally:
+        if segmenter is not None:
+            segmenter.close()
     summary["failed_frames"] = failed_frames
     layout.result_json().write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -262,15 +274,23 @@ def write_frame_products(layout: OutputLayout, out: FrameOutput) -> None:
     overlay = render_overlay(out.enhanced_bgr, contour_full, wf_full)
     cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 200, 255), max(int(min(overlay.shape[:2]) / 500), 2))
     # 落盘每帧产物（轮廓提取图在 ROI 上渲染 -> 小晶体自动放大）
-    _imwrite(str(layout.input_frame(frame.name)), frame.image_bgr)
-    _imwrite(str(layout.enhanced(frame.name)), out.enhanced_bgr)
-    _imwrite(str(layout.edge(frame.name)), out.edge_map)
-    _imwrite(str(layout.mask(frame.name)), out.mask)
-    _imwrite(str(layout.contour(frame.name)),
-             render_contour_image(out.roi_bgr.shape, out.silhouette_contour, out.wireframe))
-    _imwrite(str(layout.overlay(frame.name)), overlay)
-    _imwrite(str(layout.debug(frame.name, "saliency")), out.roi.saliency)
-    _imwrite(str(layout.debug(frame.name, "roi")), out.roi_bgr)
+    def write_required(path: Path, image: np.ndarray | None) -> None:
+        if image is None or not _imwrite(str(path), image):
+            raise RuntimeError(f"无法写入图像产物（磁盘空间、权限或编码失败）: {path}")
+
+    if frame.image_bgr is None or out.roi_bgr is None or out.enhanced_bgr is None:
+        raise RuntimeError(f"帧 {frame.name} 的图像缓冲已释放，不能写入产物")
+    write_required(layout.input_frame(frame.name), frame.image_bgr)
+    write_required(layout.enhanced(frame.name), out.enhanced_bgr)
+    write_required(layout.edge(frame.name), out.edge_map)
+    write_required(layout.mask(frame.name), out.mask)
+    write_required(
+        layout.contour(frame.name),
+        render_contour_image(out.roi_bgr.shape, out.silhouette_contour, out.wireframe),
+    )
+    write_required(layout.overlay(frame.name), overlay)
+    write_required(layout.debug(frame.name, "saliency"), out.roi.saliency)
+    write_required(layout.debug(frame.name, "roi"), out.roi_bgr)
 
 
 def finalize_stage1(cfg: Stage1Config, layout: OutputLayout,
@@ -291,7 +311,8 @@ def finalize_stage1(cfg: Stage1Config, layout: OutputLayout,
         max(geometry_px["length_px"], 1e-3), max(geometry_px["width_px"], 1e-3),
         max(geometry_px["body_height_px"], 1e-3), max(geometry_px["pyramid_height_px"], 1e-3),
     )
-    _imwrite(str(layout.geometry_preview()), render_geometry_preview(geometry_px))
+    if not _imwrite(str(layout.geometry_preview()), render_geometry_preview(geometry_px)):
+        raise RuntimeError(f"无法写入几何预览: {layout.geometry_preview()}")
     write_obj(geometry_px, layout.geometry_obj())
 
     # 代表帧的三张图另存到输出根目录，方便直接查看「这一个晶体」的结果

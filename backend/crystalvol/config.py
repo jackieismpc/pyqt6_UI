@@ -176,6 +176,7 @@ class Stage1Config:
     num_frames: int = 7              # 视频均匀抽帧数
     frame_start_ratio: float = 0.0
     frame_end_ratio: float = 1.0
+    max_session_frames: int = 120  # 实时会话只保留最近窗口，避免长期重拟合无限增长
 
     preprocess: PreprocessConfig = field(default_factory=PreprocessConfig)
     localize: LocalizeConfig = field(default_factory=LocalizeConfig)

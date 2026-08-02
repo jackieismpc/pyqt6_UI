@@ -35,13 +35,22 @@ def collect_images(directory: str | Path, recursive: bool = False) -> list[Path]
 
 
 def _read_image(path: Path) -> np.ndarray:
-    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    try:
+        with path.open("rb") as handle:
+            encoded = np.frombuffer(handle.read(), dtype=np.uint8)
+        image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    except (OSError, ValueError, MemoryError, cv2.error) as exc:
+        raise RuntimeError(f"无法读取图片: {path} ({exc})") from exc
     if image is None:
         raise RuntimeError(f"无法读取图片: {path}")
     return image
 
 
-def detect_views(paths: list[Path], spec: BoardSpec) -> tuple[list[CalibrationView], tuple[int, int], list[str]]:
+def detect_views(
+    paths: list[Path],
+    spec: BoardSpec,
+    include_debug: bool = False,
+) -> tuple[list[CalibrationView], tuple[int, int], list[str]]:
     views: list[CalibrationView] = []
     rejected: list[str] = []
     image_size: tuple[int, int] | None = None
@@ -54,7 +63,7 @@ def detect_views(paths: list[Path], spec: BoardSpec) -> tuple[list[CalibrationVi
             raise RuntimeError(
                 f"标定图片分辨率不一致：{path.name} 为 {size}，期望 {image_size}。"
             )
-        detection = detect_pattern(image, spec)
+        detection = detect_pattern(image, spec, include_debug=include_debug)
         if detection is None:
             rejected.append(str(path))
             continue
@@ -153,14 +162,19 @@ def calibrate_intrinsics(
     if min_views < 3:
         raise ValueError("min-views 不能小于 3")
     paths = collect_images(image_dir, recursive=recursive)
-    views, image_size, detection_rejected = detect_views(paths, spec)
+    views, image_size, detection_rejected = detect_views(
+        paths, spec, include_debug=debug_dir is not None
+    )
     if len(views) < min_views:
         raise RuntimeError(f"有效标定图只有 {len(views)} 张，至少需要 {min_views} 张")
 
     if debug_dir:
         debug_root = Path(debug_dir).expanduser().resolve()
         for view in views:
-            _write_image(debug_root / view.path.name, view.detection.debug_image)
+            if view.detection.debug_image is not None:
+                _write_image(debug_root / view.path.name, view.detection.debug_image)
+                # 调试图已经落盘，不要在标定优化期间继续保留每张原尺寸图像。
+                view.detection.debug_image = None
 
     flags = _calibration_flags(model, fix_aspect_ratio, zero_tangent_dist, fix_principal_point)
     rejected_outliers: list[str] = []
