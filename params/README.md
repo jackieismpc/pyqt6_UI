@@ -56,4 +56,6 @@ uv run python -m calibration install-default \
 - `extrinsics.distance_to_object_center`：可选，标定板原点偏移到晶体中心后计算出的距离；
 - `calibration`：重投影误差、标定板规格、接受/剔除视图等审计信息。
 
+当前项目官方 ChArUco 标定板规格为 5 列×7 行、方格 30 mm、marker 15 mm、`DICT_5X5_100`，打印页为 A4 竖版。参数文件中的 `calibration.pattern` 必须与实际打印并拍摄的标定板一致；旧板或仅旋转图片都不能通过交换参数来“修正”。
+
 后端公制换算统一把外参距离转成米，再把结果输出为 cm 和 cm³；不允许前端另行读取或修改这些字段。

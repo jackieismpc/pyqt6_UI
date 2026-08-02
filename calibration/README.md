@@ -6,7 +6,7 @@
 uv run python -m calibration <command> ...
 ```
 
-它只输出当前版本统一的 `camera_parameters.json`，不兼容旧的 TXT 参数或旧的后端工具脚本。项目默认使用 ChArUco；实现使用 OpenCV calib3d 和 ArUco/ChArUco 的现代 API，OpenCV 版本由根目录 `pyproject.toml` 管理。
+它只输出当前版本统一的 `camera_parameters.json`，不兼容旧的 TXT 参数或旧的后端工具脚本。项目默认使用 OpenCV 官方 ChArUco 示例：7 行、5 列方格，30 mm 方格、15 mm marker、`DICT_5X5_100`。实现使用 OpenCV calib3d 和现代 ArUco/ChArUco API，生成板固定为 modern pattern，OpenCV 版本由根目录 `pyproject.toml` 管理。
 
 ## 命令概览
 
@@ -32,27 +32,35 @@ uv run python -m calibration extrinsics -h
 ```bash
 uv run python -m calibration board \
   --type charuco \
-  --pattern-size 7x5 \
+  --columns 5 \
+  --rows 7 \
   --square-size 30 \
-  --marker-length 22 \
+  --marker-length 15 \
   --dictionary DICT_5X5_100 \
   --unit mm \
   --dpi 300 \
-  --margin-mm 10 \
-  --output data/calibration/charuco.png
+  --paper a4 \
+  --orientation portrait \
+  --output data/calibration/charuco_a4.svg
 ```
 
 参数：
 
 - `--type charuco`：ArUco marker 与棋盘格角点组合的标定板；
-- `--pattern-size 7x5`：**方格数**列数 x 行数；`7x5` 与 `5x7` 不能互换，必须与实际打印板的横向/纵向方格数一致；
+- `--columns 5 --rows 7`：方格列数和行数，顺序与 OpenCV `CharucoBoard((columns, rows), ...)` 一致；也可以写成 `--pattern-size 5x7`；
 - `--square-size 30`：一个方格的物理边长；
-- `--marker-length 22`：ArUco marker 边长，必须小于方格边长；
+- `--marker-length 15`：ArUco marker 边长，必须小于方格边长；
 - `--dictionary DICT_5X5_100`：marker 使用的 OpenCV 预定义字典；
 - `--unit mm|cm|m`：所有物理长度的单位；
 - `--dpi`：生成图片的打印分辨率，默认 300；
-- `--margin-mm`：白色外边距，默认 10 mm；
-- `--output`：PNG/JPG 输出路径，同时生成同名 `.json` 元数据。
+- `--paper a4`：输出 A4 页面；当前只支持 A4；
+- `--orientation portrait`：A4 竖版，官方打印方案使用该方向；
+- `--margin-mm`：标定板图案外附加白边，不改变 150×210 mm 的图案尺寸，默认 0；
+- `--output`：推荐输出 SVG；也支持 PNG/JPG，同时生成同名 `.json` 元数据。
+
+官方样例的页面尺寸是 A4 210×297 mm，板本体是 5×7 个方格，即 150×210 mm。板居中后左右约 30 mm、上下约 43.5 mm。打印 SVG 或带 DPI 的 PNG 时必须选择“实际大小/100%”，关闭“适应页面”；打印后应实测方格边长为 30 mm。项目不根据图片是横向还是竖向自动交换列行，旋转同一块板时仍使用原始规格。
+
+OpenCV 曾经存在 legacy ChArUco 模板。当前项目明确使用 modern pattern，不设置 `setLegacyPattern(True)`；生成、检测、内参和外参必须使用同一套板参数和同一版本的 OpenCV。
 
 ### 棋盘格（显式选择）
 
@@ -92,9 +100,10 @@ uv run python -m calibration board --type asymmetric_circles_grid --pattern-size
 ```bash
 uv run python -m calibration intrinsics data/calibration/intrinsics \
   --type charuco \
-  --pattern-size 7x5 \
+  --columns 5 \
+  --rows 7 \
   --square-size 30 \
-  --marker-length 22 \
+  --marker-length 15 \
   --dictionary DICT_5X5_100 \
   --unit mm \
   --output params/camera_parameters.json \
@@ -118,7 +127,7 @@ uv run python -m calibration intrinsics data/calibration/intrinsics \
 
 默认 ChArUco 流程使用 `CharucoDetector`、`Board.matchImagePoints` 和 `calibrateCameraExtended`；`calibration` 负责检测和 schema 封装，数值优化仍由 OpenCV 完成。棋盘格模式才使用 `findChessboardCornersSB`。
 
-如果有效图片为 0，先检查 `--pattern-size` 的列、行方向以及字典是否与打印板一致。程序会在 ChArUco 检测全部失败时额外尝试交换列/行；如果发现例如 `7x5`，会把可直接复制的修正参数写入错误信息。当前项目随附照片对应 `7x5`，不是 `5x7`。
+如果有效图片为 0，先检查列数、行数、方格边长、marker 边长和字典是否与打印板完全一致。旋转同一块板不需要交换列行。旧版 `7x5 + marker-length=22` 图片不能用于新的官方 `5x7 + marker-length=15` 方案，应重新打印和拍摄。
 
 标定命令成功不代表样本质量一定足够。应检查输出中的 `calibration.reprojection_error_px`、`per_view_errors_px`、`detection_rejected_images` 和 `outlier_rejected_images`。通常应重新拍摄覆盖画面中心、四角、不同距离和倾角的清晰图片；标定板应占画面较大区域且保持平整。重投影误差约 10 px 的结果不建议安装为后端默认参数。
 
@@ -129,9 +138,10 @@ uv run python -m calibration extrinsics \
   --image data/calibration/pose/center.png \
   --parameters params/camera_parameters.json \
   --type charuco \
-  --pattern-size 7x5 \
+  --columns 5 \
+  --rows 7 \
   --square-size 30 \
-  --marker-length 22 \
+  --marker-length 15 \
   --dictionary DICT_5X5_100 \
   --unit mm \
   --pose-method iterative \
@@ -181,3 +191,5 @@ uv run python -m calibration extrinsics \
 ```
 
 不要手动把不同单位或不同分辨率的参数拼在一起。后端会验证矩阵尺寸、有限数值、焦距、外参坐标约定和单位；不合法文件会在启动或 CLI 开始时明确失败。
+
+官方参考：[OpenCV 标定板生成](https://docs.opencv.org/4.x/da/d0d/tutorial_camera_calibration_pattern.html)、[ChArUco 检测](https://docs.opencv.org/4.x/df/d4a/tutorial_charuco_detection.html)、[CharucoBoard API](https://docs.opencv.org/4.x/d0/d3c/classcv_1_1aruco_1_1CharucoBoard.html)。

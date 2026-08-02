@@ -67,21 +67,24 @@ uv run python main.py
 
 ### 1. 生成 ChArUco 标定板
 
-项目默认使用 ChArUco。默认规格为 7x5 个方格、30 mm 方格边长、22 mm marker、`DICT_5X5_100` 字典。ChArUco 的 `--pattern-size` 表示**方格数（列 x 行）**，不是内角点数；`7x5` 与 `5x7` 是两种不同的板型：
+项目默认使用 OpenCV 官方 ChArUco 示例：7 行、5 列方格，30 mm 方格边长、15 mm marker、`DICT_5X5_100` 字典。项目命令统一使用**列 x 行**，因此官方示例写成 `5x7`；也可以使用无歧义的 `--columns 5 --rows 7`。ChArUco 的尺寸是方格数，不是内角点数：
 
 ```bash
 uv run python -m calibration board \
   --type charuco \
-  --pattern-size 7x5 \
+  --columns 5 \
+  --rows 7 \
   --square-size 30 \
-  --marker-length 22 \
+  --marker-length 15 \
   --dictionary DICT_5X5_100 \
   --unit mm \
+  --paper a4 \
+  --orientation portrait \
   --dpi 300 \
-  --output data/calibration/charuco.png
+  --output data/calibration/charuco_a4.svg
 ```
 
-命令同时生成同名 `.json` 元数据。若确实要使用棋盘格，必须显式加入 `--type chessboard`；全部参数见 [calibration/README.md](calibration/README.md)。
+命令同时生成同名 `.json` 元数据。A4 页面是 210×297 mm 竖版，标定板本体是 150×210 mm；打印时必须选择“实际大小/100%”，关闭“适应页面”。SVG 是打印主文件，PNG 仅用于预览或不支持 SVG 的打印流程。若确实要使用棋盘格，必须显式加入 `--type chessboard`；全部参数见 [calibration/README.md](calibration/README.md)。
 
 ### 2. 用图片目录标定内参
 
@@ -90,9 +93,10 @@ uv run python -m calibration board \
 ```bash
 uv run python -m calibration intrinsics data/calibration/intrinsics \
   --type charuco \
-  --pattern-size 7x5 \
+  --columns 5 \
+  --rows 7 \
   --square-size 30 \
-  --marker-length 22 \
+  --marker-length 15 \
   --dictionary DICT_5X5_100 \
   --unit mm \
   --output params/camera_parameters.json \
@@ -101,7 +105,7 @@ uv run python -m calibration intrinsics data/calibration/intrinsics \
 
 程序使用 OpenCV `CharucoDetector`、`Board.matchImagePoints` 和 `calibrateCameraExtended`，默认按单视图重投影误差剔除明显异常图，输出内参、畸变、每张图的外参、重投影误差和接受/剔除列表。
 
-如果提示有效标定图为 0，先检查 ChArUco 的列行方向。当前项目照片使用 `7x5`；程序检测到全部失败时会自动尝试交换方向，并在错误信息中提示可复制的 `--pattern-size`。
+如果提示有效标定图为 0，先检查生成板时的列、行、方格边长、marker 边长和字典是否完全一致。旋转同一块板不需要交换列行。旧版项目生成的 `7x5 + marker-length=22` 图片不能与新的官方 `5x7 + marker-length=15` 规格混用，应重新打印和拍摄。
 
 ### 3. 用单张图片求外参
 
@@ -112,9 +116,10 @@ uv run python -m calibration extrinsics \
   --image data/calibration/pose/center.png \
   --parameters params/camera_parameters.json \
   --type charuco \
-  --pattern-size 7x5 \
+  --columns 5 \
+  --rows 7 \
   --square-size 30 \
-  --marker-length 22 \
+  --marker-length 15 \
   --dictionary DICT_5X5_100 \
   --unit mm \
   --pose-method iterative \
@@ -132,7 +137,7 @@ uv run python -m calibration install-default \
   --parameters params/camera_parameters_with_extrinsic.json
 ```
 
-也可以在 `intrinsics` 或 `extrinsics` 命令末尾直接使用 `--update-default`，但这会覆盖 `backend/crystalvol/defaults/camera_parameters.json`，应在确认重投影误差和距离校验通过后再使用。实现对齐 OpenCV 官方 calib3d/ArUco 流程，参考：[calib3d](https://docs.opencv.org/4.8.0/d9/d0c/group__calib3d.html) 和 [ArUco calibration](https://docs.opencv.org/4.13.0/da/d13/tutorial_aruco_calibration.html)。
+也可以在 `intrinsics` 或 `extrinsics` 命令末尾直接使用 `--update-default`，但这会覆盖 `backend/crystalvol/defaults/camera_parameters.json`，应在确认重投影误差和距离校验通过后再使用。实现对齐 OpenCV 官方流程，参考：[标定板生成](https://docs.opencv.org/4.x/da/d0d/tutorial_camera_calibration_pattern.html)、[ChArUco 检测](https://docs.opencv.org/4.x/df/d4a/tutorial_charuco_detection.html) 和 [calib3d](https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html)。
 
 ## 后端独立运行
 
