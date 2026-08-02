@@ -25,11 +25,17 @@ params/camera_parameters.json
 
 ```bash
 uv run python -m calibration intrinsics data/calibration/intrinsics \
+  --columns 5 --rows 7 \
+  --square-size 30 --marker-length 15 \
+  --dictionary DICT_5X5_100 \
   --output params/camera_parameters.json
 
 uv run python -m calibration extrinsics \
   --image data/calibration/pose/center.png \
   --parameters params/camera_parameters.json \
+  --columns 5 --rows 7 \
+  --square-size 30 --marker-length 15 \
+  --dictionary DICT_5X5_100 \
   --output params/camera_parameters_with_extrinsic.json
 ```
 

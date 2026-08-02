@@ -67,9 +67,11 @@ OpenCV 曾经存在 legacy ChArUco 模板。当前项目明确使用 modern patt
 ```bash
 uv run python -m calibration board \
   --type chessboard \
-  --pattern-size 9x6 \
-  --square-size 30 \
+  --pattern-size 8x5 \
+  --square-size 20 \
   --unit mm \
+  --paper a4 \
+  --orientation landscape \
   --output data/calibration/chessboard.png
 ```
 
