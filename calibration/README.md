@@ -6,7 +6,7 @@
 uv run python -m calibration <command> ...
 ```
 
-它只输出当前版本统一的 `camera_parameters.json`，不兼容旧的 TXT 参数或旧的后端工具脚本。实现使用 OpenCV calib3d 和 ArUco/ChArUco 的现代 API；OpenCV 版本由根目录 `pyproject.toml` 管理。
+它只输出当前版本统一的 `camera_parameters.json`，不兼容旧的 TXT 参数或旧的后端工具脚本。项目默认使用 ChArUco；实现使用 OpenCV calib3d 和 ArUco/ChArUco 的现代 API，OpenCV 版本由根目录 `pyproject.toml` 管理。
 
 ## 命令概览
 
@@ -27,30 +27,7 @@ uv run python -m calibration extrinsics -h
 
 ## 1. 生成标定板
 
-### 棋盘格
-
-```bash
-uv run python -m calibration board \
-  --type chessboard \
-  --pattern-size 9x6 \
-  --square-size 30 \
-  --unit mm \
-  --dpi 300 \
-  --margin-mm 10 \
-  --output data/calibration/chessboard.png
-```
-
-参数：
-
-- `--type chessboard`：黑白棋盘格；
-- `--pattern-size 9x6`：**内角点**列数 x 行数。9x6 会绘制 10x7 个方格；
-- `--square-size 30`：一个方格的物理边长；
-- `--unit mm|cm|m`：所有物理长度的单位；
-- `--dpi`：生成图片的打印分辨率，默认 300；
-- `--margin-mm`：白色外边距，默认 10 mm；
-- `--output`：PNG/JPG 输出路径，同时生成同名 `.json` 元数据。
-
-### ChArUco
+### ChArUco（项目默认）
 
 ```bash
 uv run python -m calibration board \
@@ -60,10 +37,35 @@ uv run python -m calibration board \
   --marker-length 22 \
   --dictionary DICT_5X5_100 \
   --unit mm \
+  --dpi 300 \
+  --margin-mm 10 \
   --output data/calibration/charuco.png
 ```
 
-ChArUco 的 `pattern-size` 表示方格数（列 x 行），`marker-length` 必须小于 `square-size`。`--dictionary` 使用 OpenCV `aruco` 预定义字典名称。
+参数：
+
+- `--type charuco`：ArUco marker 与棋盘格角点组合的标定板；
+- `--pattern-size 5x7`：**方格数**列数 x 行数；
+- `--square-size 30`：一个方格的物理边长；
+- `--marker-length 22`：ArUco marker 边长，必须小于方格边长；
+- `--dictionary DICT_5X5_100`：marker 使用的 OpenCV 预定义字典；
+- `--unit mm|cm|m`：所有物理长度的单位；
+- `--dpi`：生成图片的打印分辨率，默认 300；
+- `--margin-mm`：白色外边距，默认 10 mm；
+- `--output`：PNG/JPG 输出路径，同时生成同名 `.json` 元数据。
+
+### 棋盘格（显式选择）
+
+```bash
+uv run python -m calibration board \
+  --type chessboard \
+  --pattern-size 9x6 \
+  --square-size 30 \
+  --unit mm \
+  --output data/calibration/chessboard.png
+```
+
+棋盘格的 `pattern-size` 表示内角点数量（列 x 行），不是黑白方格数量。只有命令中显式指定 `--type chessboard` 时才使用棋盘格流程。
 
 ### 圆点板
 
@@ -89,9 +91,11 @@ uv run python -m calibration board --type asymmetric_circles_grid --pattern-size
 
 ```bash
 uv run python -m calibration intrinsics data/calibration/intrinsics \
-  --type chessboard \
-  --pattern-size 9x6 \
+  --type charuco \
+  --pattern-size 5x7 \
   --square-size 30 \
+  --marker-length 22 \
+  --dictionary DICT_5X5_100 \
   --unit mm \
   --output params/camera_parameters.json \
   --debug-dir data/calibration/intrinsics_debug
@@ -112,7 +116,7 @@ uv run python -m calibration intrinsics data/calibration/intrinsics \
 - `--debug-dir`：输出每张检测结果图，便于确认角点顺序和漏检；
 - `--update-default`：成功后覆盖后端内置默认参数，谨慎使用。
 
-程序使用 `findChessboardCornersSB`、`CharucoDetector`、`Board.matchImagePoints`、`calibrateCameraExtended` 等 OpenCV API。`calibration` 负责检测和 schema 封装，数值优化仍由 OpenCV 完成。
+默认 ChArUco 流程使用 `CharucoDetector`、`Board.matchImagePoints` 和 `calibrateCameraExtended`；`calibration` 负责检测和 schema 封装，数值优化仍由 OpenCV 完成。棋盘格模式才使用 `findChessboardCornersSB`。
 
 ## 3. 单图外参
 
@@ -120,9 +124,11 @@ uv run python -m calibration intrinsics data/calibration/intrinsics \
 uv run python -m calibration extrinsics \
   --image data/calibration/pose/center.png \
   --parameters params/camera_parameters.json \
-  --type chessboard \
-  --pattern-size 9x6 \
+  --type charuco \
+  --pattern-size 5x7 \
   --square-size 30 \
+  --marker-length 22 \
+  --dictionary DICT_5X5_100 \
   --unit mm \
   --pose-method iterative \
   --object-center 0 0 0 \

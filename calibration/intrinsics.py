@@ -215,7 +215,11 @@ def calibrate_intrinsics(
         )
 
     calibration_metadata = {
-        "method": "opencv_calibrateCameraExtended",
+        "method": (
+            "opencv_CharucoDetector+calibrateCameraExtended"
+            if spec.pattern_type == "charuco"
+            else "opencv_calibrateCameraExtended"
+        ),
         "model": model,
         "pattern": {
             "type": spec.pattern_type,

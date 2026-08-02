@@ -19,7 +19,7 @@ pyqt6_UI/
 
 - [app/README.md](app/README.md)：界面、后台线程、摄像头和错误恢复。
 - [backend/README.md](backend/README.md)：算法流水线、后端 CLI、输出和性能参数。
-- [calibration/README.md](calibration/README.md)：棋盘格、内参和单图外参命令。
+- [calibration/README.md](calibration/README.md)：ChArUco、内参和单图外参命令。
 - [params/README.md](params/README.md)：统一相机参数 JSON schema 和加载优先级。
 - [data/README.md](data/README.md)：原始数据与结果的目录约定。
 
@@ -65,21 +65,23 @@ uv run python main.py
 
 下面的命令在项目根目录执行。也可以把 `uv run` 换成已激活虚拟环境中的 `python`。
 
-### 1. 生成棋盘格
+### 1. 生成 ChArUco 标定板
 
-`chessboard` 的 `--pattern-size` 是 OpenCV 检测用的**内角点数（列 x 行）**，不是黑白方格数。`--square-size` 是实际方格边长，单位由 `--unit` 指定：
+项目默认使用 ChArUco。默认规格为 5x7 个方格、30 mm 方格边长、22 mm marker、`DICT_5X5_100` 字典。ChArUco 的 `--pattern-size` 表示**方格数（列 x 行）**，不是内角点数：
 
 ```bash
 uv run python -m calibration board \
-  --type chessboard \
-  --pattern-size 9x6 \
+  --type charuco \
+  --pattern-size 5x7 \
   --square-size 30 \
+  --marker-length 22 \
+  --dictionary DICT_5X5_100 \
   --unit mm \
   --dpi 300 \
-  --output data/calibration/chessboard.png
+  --output data/calibration/charuco.png
 ```
 
-命令同时生成同名 `.json` 元数据。除棋盘格外，还支持 `charuco`、`circles_grid` 和 `asymmetric_circles_grid`；全部参数见 [calibration/README.md](calibration/README.md)。
+命令同时生成同名 `.json` 元数据。若确实要使用棋盘格，必须显式加入 `--type chessboard`；全部参数见 [calibration/README.md](calibration/README.md)。
 
 ### 2. 用图片目录标定内参
 
@@ -87,15 +89,17 @@ uv run python -m calibration board \
 
 ```bash
 uv run python -m calibration intrinsics data/calibration/intrinsics \
-  --type chessboard \
-  --pattern-size 9x6 \
+  --type charuco \
+  --pattern-size 5x7 \
   --square-size 30 \
+  --marker-length 22 \
+  --dictionary DICT_5X5_100 \
   --unit mm \
   --output params/camera_parameters.json \
   --debug-dir data/calibration/intrinsics_debug
 ```
 
-程序使用 OpenCV `calibrateCameraExtended`，默认按单视图重投影误差剔除明显异常图，输出内参、畸变、每张图的外参、重投影误差和接受/剔除列表。
+程序使用 OpenCV `CharucoDetector`、`Board.matchImagePoints` 和 `calibrateCameraExtended`，默认按单视图重投影误差剔除明显异常图，输出内参、畸变、每张图的外参、重投影误差和接受/剔除列表。
 
 ### 3. 用单张图片求外参
 
@@ -105,9 +109,11 @@ uv run python -m calibration intrinsics data/calibration/intrinsics \
 uv run python -m calibration extrinsics \
   --image data/calibration/pose/center.png \
   --parameters params/camera_parameters.json \
-  --type chessboard \
-  --pattern-size 9x6 \
+  --type charuco \
+  --pattern-size 5x7 \
   --square-size 30 \
+  --marker-length 22 \
+  --dictionary DICT_5X5_100 \
   --unit mm \
   --pose-method iterative \
   --object-center 0 0 0 \
