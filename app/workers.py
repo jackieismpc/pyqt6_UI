@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from typing import Optional
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -36,12 +37,19 @@ class RunWorker(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             result: Stage1Result = self._backend.run(
                 self._input_path, self._input_type, self._options,
             )
-            self.resultReady.emit(result)
+            if not self.isInterruptionRequested():
+                self.resultReady.emit(result)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
+
+    def cancel(self) -> None:
+        """请求取消；后端算法在当前不可中断阶段结束后不会再更新 UI。"""
+        self.requestInterruption()
 
 
 from .platform_utils import ensure_mvs_importable
@@ -70,37 +78,42 @@ class RealtimeWorker(QThread):
         self._save = save
         self._running = True
         self._capture_requested = False
+        self._state_lock = threading.Lock()
         self._latest_frame = None
         self._sdk_cam = None
 
     # ---- 主线程调用 ----
     def request_capture(self) -> None:
-        self._capture_requested = True
+        with self._state_lock:
+            if self._running:
+                self._capture_requested = True
 
     def stop(self) -> None:
-        self._running = False
+        with self._state_lock:
+            self._running = False
 
     # ---- 线程体 ----
     def run(self) -> None:
         import cv2
 
+        cap = None
+        sdk_reader = None
+        session_started = False
         try:
             self._backend.start_realtime_session(save=self._save)
-        except Exception as exc:  # noqa: BLE001
-            self.error.emit(f"实时会话初始化失败：{exc}")
-            self.stopped.emit()
-            return
+            session_started = True
+            try:
+                cap, sdk_reader = self._open_camera(cv2)
+            except Exception as exc:  # noqa: BLE001
+                self.error.emit(f"打开摄像头时发生异常：{exc}")
+                return
+            if cap is None and sdk_reader is None:
+                self.cameraOpened.emit(False)
+                return
+            self.cameraOpened.emit(True)
 
-        cap, sdk_reader = self._open_camera(cv2)
-        if cap is None and sdk_reader is None:
-            self.cameraOpened.emit(False)
-            self.stopped.emit()
-            return
-        self.cameraOpened.emit(True)
-
-        last_preview = 0.0
-        preview_interval = 1.0 / 15.0
-        try:
+            last_preview = 0.0
+            preview_interval = 1.0 / 15.0
             while self._running:
                 if sdk_reader:
                     ok, frame = sdk_reader()
@@ -123,8 +136,10 @@ class RealtimeWorker(QThread):
                             preview = frame
                         self.previewFrame.emit(preview, now)
 
-                if self._capture_requested:
+                with self._state_lock:
+                    capture_requested = self._capture_requested
                     self._capture_requested = False
+                if capture_requested:
                     if self._latest_frame is None:
                         self.error.emit("尚未取到画面，请稍候再拍。")
                     else:
@@ -139,12 +154,18 @@ class RealtimeWorker(QThread):
 
                 # 控制预览刷新率，同时给主线程留出事件处理时间
                 self.msleep(10)
+        except Exception as exc:  # noqa: BLE001
+            self.error.emit(f"实时任务异常：{exc}")
         finally:
             if cap is not None:
                 cap.release()
             if sdk_reader is not None:
                 self._close_sdk_camera()
-            self._backend.end_realtime_session()
+            if session_started:
+                try:
+                    self._backend.end_realtime_session()
+                except Exception as exc:  # noqa: BLE001
+                    self.error.emit(f"实时会话清理失败：{exc}")
             self.stopped.emit()
 
     # ---- 摄像头打开逻辑 ----

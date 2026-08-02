@@ -196,7 +196,11 @@ class MainWindow(QMainWindow):
         if self._cameras_scanned:
             return
         self._cameras_scanned = True
-        self._available_cameras = scan_cameras()
+        try:
+            self._available_cameras = scan_cameras()
+        except Exception as exc:  # noqa: BLE001
+            self._available_cameras = []
+            self.control_bar.set_status(f"摄像头扫描失败：{exc}")
         self.control_bar.set_cameras(self._available_cameras)
 
     # ==================================================================
@@ -397,7 +401,24 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """关闭窗口时确保摄像头线程退出。"""
+        if self._run_worker is not None and self._run_worker.isRunning():
+            self._run_worker.cancel()
+            if not self._run_worker.wait(5000):
+                QMessageBox.warning(
+                    self,
+                    "任务仍在运行",
+                    "后端任务尚未安全结束，请等待当前任务完成后再关闭窗口。",
+                )
+                event.ignore()
+                return
         if self._rt_worker is not None and self._rt_worker.isRunning():
             self._rt_worker.stop()
-            self._rt_worker.wait(2000)
+            if not self._rt_worker.wait(3000):
+                QMessageBox.warning(
+                    self,
+                    "摄像头仍在使用",
+                    "摄像头任务尚未安全结束，请稍候再关闭窗口。",
+                )
+                event.ignore()
+                return
         super().closeEvent(event)

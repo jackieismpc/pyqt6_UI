@@ -177,23 +177,38 @@ def _consolidate_geometry(pool: List[FrameOutput]) -> Dict[str, float]:
 def run_stage1(cfg: Stage1Config) -> Dict[str, object]:
     """第一阶段主入口。"""
     section("第一阶段：像素域轮廓与线框重建")
-    layout = OutputLayout(Path(cfg.output_dir).expanduser().resolve()).prepare(clean=cfg.clean_output)
-    log(f"输出目录: {layout.root}")
-
     frames = load_inputs(
         cfg.input_path, cfg.num_frames, cfg.frame_start_ratio, cfg.frame_end_ratio, cfg.max_input_side,
     )
     log(f"读入 {len(frames)} 帧（输入: {cfg.input_path}）")
 
+    layout = OutputLayout(Path(cfg.output_dir).expanduser().resolve()).prepare(clean=cfg.clean_output)
+    log(f"输出目录: {layout.root}")
+
     segmenter = build_segmenter(cfg)
 
     frame_outputs: List[FrameOutput] = []
+    failed_frames: list[dict[str, str]] = []
     for frame in frames:
-        out = _process_frame(frame, cfg, segmenter)
+        try:
+            out = _process_frame(frame, cfg, segmenter)
+        except Exception as exc:  # noqa: BLE001
+            # 单帧异常不应让整批任务崩溃；保留错误并继续处理后续视图。
+            failed_frames.append({"name": frame.name, "error": f"{type(exc).__name__}: {exc}"})
+            warn(f"[{frame.name}] 单帧处理失败，跳过并继续：{exc}")
+            continue
         frame_outputs.append(out)
         write_frame_products(layout, out)
 
+    if not frame_outputs:
+        details = "；".join(f"{item['name']}: {item['error']}" for item in failed_frames)
+        raise RuntimeError(f"所有输入帧均处理失败。{details}")
+
     summary = finalize_stage1(cfg, layout, frame_outputs)
+    summary["failed_frames"] = failed_frames
+    layout.result_json().write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     log(f"第一阶段完成：fit_ready {summary['fit_ready_count']}/{len(frame_outputs)} 帧")
     g = summary["geometry_px"]
     log(f"像素几何：length={g['length_px']:.1f}px width={g['width_px']:.1f}px "

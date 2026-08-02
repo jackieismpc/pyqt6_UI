@@ -166,7 +166,7 @@ class Stage1Config:
     """第一阶段（像素域）总配置。"""
 
     input_path: str
-    output_dir: str = "outputs/stage1"
+    output_dir: str = "data/results/stage1"
     clean_output: bool = False
     device: str = "auto"
 
@@ -190,7 +190,7 @@ class Stage2Config:
 
     stage1_geometry_json: str        # 第一阶段产物 standard_geometry_pixel.json
     camera_parameters: Optional[str] = None  # 显式相机参数 JSON；省略时由后端解析优先级
-    output_dir: str = "outputs/stage2"
+    output_dir: str = "data/results/stage2"
     mode: str = "auto"               # auto | scale_anchor | extrinsic_multiview
 
     metric_anchor: MetricAnchorConfig = field(default_factory=MetricAnchorConfig)

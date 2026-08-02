@@ -135,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- stage1 ----
     def add_stage1_body(p):
         p.add_argument("input", help="输入：单张图片、图片目录或视频。")
-        p.add_argument("--output-dir", default="outputs/stage1", help="输出目录。默认 outputs/stage1。")
+        p.add_argument("--output-dir", default="data/results/stage1", help="输出目录。默认 data/results/stage1。")
         p.add_argument("--clean-output", action="store_true", help="运行前清空输出目录。")
         p.add_argument("--device", default="auto", help="计算设备：auto/cpu/mps/cuda:0。默认 auto。")
         p.add_argument("--max-input-side", type=int, default=2304, help="超大图先缩放到该最长边。默认 2304。")
@@ -165,7 +165,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_stage2.add_argument("--stage1-geometry", required=True,
                           help="第一阶段产物 geometry/standard_geometry_pixel.json。")
     p_stage2.add_argument("--camera-parameters", default=None, help="统一相机参数 JSON；省略时使用 params/ 或后端默认参数。")
-    p_stage2.add_argument("--output-dir", default="outputs/stage2", help="输出目录。默认 outputs/stage2。")
+    p_stage2.add_argument("--output-dir", default="data/results/stage2", help="输出目录。默认 data/results/stage2。")
     p_stage2.add_argument("--mode", choices=["auto", "scale_anchor", "extrinsic_multiview"], default="auto",
                           help="公制恢复模式。默认 auto。")
     p_stage2.add_argument("--turntable-config", default=None, help="转台/参考板配置（extrinsic 模式用）。")
@@ -178,7 +178,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_full = sub.add_parser("full", help="依次运行第一阶段 + 第二阶段。")
     add_stage1_body(p_full)
     p_full.add_argument("--camera-parameters", default=None, help="统一相机参数 JSON；省略时使用 params/ 或后端默认参数。")
-    p_full.add_argument("--stage2-output-dir", default="outputs/stage2", help="第二阶段输出目录。")
+    p_full.add_argument("--stage2-output-dir", default="data/results/stage2", help="第二阶段输出目录。")
     p_full.add_argument("--mode", choices=["auto", "scale_anchor", "extrinsic_multiview"], default="auto",
                         help="公制恢复模式。默认 auto。")
     p_full.add_argument("--turntable-config", default=None, help="转台/参考板配置（extrinsic 模式用）。")
@@ -195,7 +195,11 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.command == "stage1":
-        run_stage1(_stage1_from_args(args))
+        try:
+            run_stage1(_stage1_from_args(args))
+        except Exception as exc:  # noqa: BLE001
+            warn(f"第一阶段失败：{type(exc).__name__}: {exc}")
+            return 2
         return 0
 
     if args.command == "stage2":
@@ -218,7 +222,11 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "full":
-        summary = run_stage1(_stage1_from_args(args))
+        try:
+            summary = run_stage1(_stage1_from_args(args))
+        except Exception as exc:  # noqa: BLE001
+            warn(f"第一阶段失败：{type(exc).__name__}: {exc}")
+            return 2
         geometry_json = str(Path(summary["output_dir"]) / "geometry" / "standard_geometry_pixel.json")
         cfg = Stage2Config(
             stage1_geometry_json=geometry_json,

@@ -13,7 +13,7 @@ _os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
 
 import sys
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from app.backend_interface import BackendInterface
 from app.main_window import MainWindow
@@ -28,7 +28,16 @@ def main():
 
     # 由后端加载相机参数；前端只接收轻量摘要和用户选择。
     parameter_service = BackendInterface()
-    parameter_summary = parameter_service.camera_parameter_summary()
+    try:
+        parameter_summary = parameter_service.camera_parameter_summary()
+    except Exception as exc:  # noqa: BLE001
+        QMessageBox.critical(
+            None,
+            "相机参数加载失败",
+            "后端默认参数也无法读取，程序无法安全启动。\n\n"
+            f"{type(exc).__name__}: {exc}",
+        )
+        return 2
     dlg = StartupDialog(parameter_summary=parameter_summary)
     if dlg.exec() != StartupDialog.DialogCode.Accepted:
         sys.exit(0)
@@ -41,4 +50,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
