@@ -129,9 +129,24 @@ uv run python -m calibration intrinsics data/calibration/intrinsics \
 
 默认 ChArUco 流程使用 `CharucoDetector`、`Board.matchImagePoints` 和 `calibrateCameraExtended`；`calibration` 负责检测和 schema 封装，数值优化仍由 OpenCV 完成。棋盘格模式才使用 `findChessboardCornersSB`。
 
+内参尚未生成时，当前实现使用 OpenCV 官方的无内参 homography 插值路径，并显式关闭 marker corner refinement；内参生成后，外参检测会把 camera matrix 和 distortion 传给 `CharucoDetector` 对角点进行更准确的重投影。
+
 如果有效图片为 0，先检查列数、行数、方格边长、marker 边长和字典是否与打印板完全一致。旋转同一块板不需要交换列行。旧版 `7x5 + marker-length=22` 图片不能用于新的官方 `5x7 + marker-length=15` 方案，应重新打印和拍摄。
 
-标定命令成功不代表样本质量一定足够。应检查输出中的 `calibration.reprojection_error_px`、`per_view_errors_px`、`detection_rejected_images` 和 `outlier_rejected_images`。通常应重新拍摄覆盖画面中心、四角、不同距离和倾角的清晰图片；标定板应占画面较大区域且保持平整。重投影误差约 10 px 的结果不建议安装为后端默认参数。
+标定命令成功不代表样本质量一定足够，也不存在“只要按顺序运行就必然准确”的保证。应检查输出中的 `calibration.reprojection_error_px`、`per_view_errors_px`、`detection_rejected_images` 和 `outlier_rejected_images`。通常应重新拍摄覆盖画面中心、四角、不同距离和倾角的清晰图片；标定板应保持平整。重投影误差约 10 px 的结果不能安装为后端默认参数。
+
+### 拍摄内参图片的要求
+
+1. 相机设置使用生产运行的分辨率、宽高比、ROI/crop、binning 和镜头安装状态。
+2. 锁定焦距/变焦和对焦位置；自动对焦可能改变光学成像几何，变焦位置改变后必须使用另一份内参或重新标定。
+3. 光圈通常不直接改变内参，但可能改变景深和焦点位置。建议固定为生产光圈；如果改光圈导致重新对焦或镜头组件移动，应重新验证。
+4. 自动曝光、增益、白平衡通常不改变内参，但会影响角点检测。工业运行建议固定曝光、增益和白平衡；使用自动曝光时必须限制范围，避免过曝、欠曝、噪声和运动模糊。
+5. 建议 20–30 张：覆盖中心、四角和边缘，包含近、中、远距离以及不同水平旋转和俯仰倾角。不要把 20 张相同位置的照片当成 20 个独立视角；板应完整、清晰、平整且无反光。
+6. 近景可让板覆盖约 40%–80% 的图像高度，但不能裁切；远景仍要保证 marker 和 ChArUco 角点足够清晰。这里的距离范围是工程建议，不是 OpenCV 的固定米数，取决于镜头视场和目标工作距离。
+
+### 内参完成后的相机限制
+
+内参对应的是“相机传感器模式 + 镜头 + 变焦/焦距 + 对焦位置 + 画面裁剪”的组合。分辨率、ROI、数字变焦、binning、镜头、变焦位置或对焦位置变化后，必须重新标定或选择对应参数。光圈可以变化，但为保证清晰度和重复性建议固定；自动曝光可以变化，通常不需要重新标定，前提是没有造成模糊、过曝或严重噪声。
 
 ## 3. 单图外参
 
