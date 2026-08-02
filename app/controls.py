@@ -240,3 +240,7 @@ class ControlBar(QWidget):
     def set_growth_enabled(self, enabled: bool):
         """控制「生长预测」按钮的可见性（有推理结果时启用）。"""
         self.btn_growth.setVisible(enabled)
+
+    def set_cameras(self, cameras: list[CameraDevice] | None):
+        """更新摄像头下拉列表（用于延迟扫描后填充）。"""
+        self._populate_cameras(cameras)

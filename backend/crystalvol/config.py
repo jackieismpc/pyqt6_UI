@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 # 默认权重路径：backend/weights/（与代码仓库统一管理，完全离线）
-_BACKEND_ROOT = Path(__file__).resolve().parent  # backend/
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent  # backend/
 _DEFAULT_WORLD_MODEL = str(_BACKEND_ROOT / "weights" / "yolov8s-worldv2.pt")
 _DEFAULT_SAM2_CKPT = str(_BACKEND_ROOT / "weights" / "sam2.1_hiera_tiny.pt")
 _DEFAULT_SAM2_CFG = "configs/sam2.1/sam2.1_hiera_t.yaml"

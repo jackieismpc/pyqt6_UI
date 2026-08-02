@@ -230,8 +230,8 @@ uv run python main.py
   非 CUDA 环境必须设置，否则 `uv sync` 构建 SAM2 时会报错。
 - **模型权重**（SAM2 / YOLO-World / PiDiNet / ControlNet-HED）放在 `backend/weights/`，通过 Git LFS 管理。
   正常 `git clone` 即自动下载（约 214 MB）。若 LFS 下载失败，见下方 [LFS 备用方案](#lfs-备用方案手动权重拷贝)。
-- **深度边缘权重（PiDiNet）** 已在 `backend/weights/` 中随附，但首次运行仍会从 HuggingFace 下载
-  校验表头文件（约 2–3 MB）；离线或下载失败时，边缘提取会自动回退到 Canny，流程不中断。
+- **深度边缘权重（PiDiNet / HED）** 已随工程放在 `backend/weights/`，直接从本地加载，零网络依赖。
+  权重缺失时，边缘提取自动回退到 Canny，流程不中断。
 - 设备：macOS/Linux 默认 CPU；SAM2 在 Apple MPS 上有个别算子未实现，代码里已自动把 SAM2 降级到 CPU
   跑（ROI 裁剪后目标很小，CPU 上 SAM2-tiny 足够快）。
 - **Linux 中文显示**：Ubuntu 需要安装中文字体，否则界面中文会乱码：

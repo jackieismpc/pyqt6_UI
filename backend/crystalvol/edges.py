@@ -3,7 +3,7 @@
 
 设计要点（对应透明晶体难点）：
 - 深度边缘（PiDiNet）：对反光、暗部弱棱线远比 Canny 鲁棒，是难图的主力。
-  权重通过 controlnet_aux 从 HuggingFace 自动下载，缺失时优雅回退到 Canny。
+  权重从本地 backend/weights/ 加载（零网络），缺失时优雅回退到 Canny。
 - 融合：深度边缘（保主结构）按位或 Canny（保锐利细边）。
 - 高光抑制：把镜面高光区域内的边缘清零，避免高光边被误当成棱线。
 """
@@ -58,19 +58,14 @@ class DeepEdgeDetector:
         if self._model is not None or self._load_error is not None:
             return self._model
         try:
-            import os as _os
             import warnings
             warnings.filterwarnings("ignore")
 
-            # 如果是本地目录就直接用，否则走 HF Hub（设 local_files_only 避免连网）
+            # 本地路径：直接读文件，始终传 local_files_only=True 确保零网络
+            # controlnet_aux 的 from_pretrained 对 isdir() 路径走本地读，
+            # 但显式传参可以 100% 杜绝任何 HF Hub 校验回退。
             repo_or_path = self.repo
-            load_kwargs: dict = {}
-            if _os.path.isdir(self.repo):
-                # 本地 weights/ 目录：from_pretrained 看到 isdir() 直接读文件，零网络
-                repo_or_path = self.repo
-            else:
-                # 兜底：HF 仓库名，强制仅本地缓存
-                load_kwargs["local_files_only"] = True
+            load_kwargs: dict = {"local_files_only": True}
 
             if self.backend == "pidinet":
                 from controlnet_aux import PidiNetDetector

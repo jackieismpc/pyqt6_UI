@@ -55,8 +55,9 @@ class MainWindow(QMainWindow):
         self._last_input_path = ""  # 最近一次的输入路径（用于视频回放）
         self._last_input_type = ""  # 最近一次的输入类型
 
-        # 扫描可用摄像头
-        self._available_cameras: list[CameraDevice] = scan_cameras()
+        # 摄像头延迟扫描（仅在用户切到实时模式时才枚举，避免启动时噪声警告）
+        self._available_cameras: list[CameraDevice] = []
+        self._cameras_scanned = False
 
         central = QWidget()
         central.setObjectName("centralWidget")
@@ -66,8 +67,8 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(18, 16, 18, 16)
         main_layout.setSpacing(14)
 
-        # 顶部控制栏
-        self.control_bar = ControlBar(cameras=self._available_cameras)
+        # 顶部控制栏（摄像头延迟扫描，初始不传列表）
+        self.control_bar = ControlBar(cameras=None)
         apply_card_shadow(self.control_bar)
         main_layout.addWidget(self.control_bar)
 
@@ -190,6 +191,14 @@ class MainWindow(QMainWindow):
         """用户切换了摄像头选择。"""
         self._selected_camera_id = device_id
 
+    def _ensure_cameras_scanned(self):
+        """延迟扫描摄像头（仅首次调用时执行），避免启动时无用的设备枚举与 OpenCV 噪声。"""
+        if self._cameras_scanned:
+            return
+        self._cameras_scanned = True
+        self._available_cameras = scan_cameras()
+        self.control_bar.set_cameras(self._available_cameras)
+
     # ==================================================================
     # 一次性推理：视频 / 图片目录
     # ==================================================================
@@ -266,6 +275,9 @@ class MainWindow(QMainWindow):
         """打开摄像头，进入实时增量拍摄模式。"""
         if self._rt_worker is not None and self._rt_worker.isRunning():
             return
+
+        # 延迟扫描摄像头（仅在真正需要时才枚举设备）
+        self._ensure_cameras_scanned()
 
         # 检查是否有可用摄像头（使用控制栏最新选中的 ID）
         cam_id = self.control_bar.current_camera_id()
