@@ -26,10 +26,38 @@ uv run python backend/run.py stage1 <图片|目录|视频> \
   --clean-output \
   --device auto \
   --edge-backend auto \
+  --edge-candidates auto \
+  --candidate-top-k 3 \
   --num-frames 7
 ```
 
 第一阶段不要求相机参数，输出像素域几何和所有诊断图。目录输入会把图片按文件名排序并流式读取；视频按时间区间均匀抽帧。后端处理帧被统一缩放到 `--max-input-side`，不会把整个图片目录的原尺寸图同时放进内存。
+
+### 多候选算法和择优
+
+`--edge-backend auto` 的默认候选是 `pidinet+canny,canny`。需要扩大候选池时显式指定：
+
+```bash
+uv run python backend/run.py stage1 <输入> \
+  --edge-candidates canny,pidinet,pidinet+canny,hed+canny,lsd \
+  --candidate-top-k 3
+```
+
+可选候选：
+
+| 候选 | 作用 |
+|---|---|
+| `canny` | 传统边缘，速度快、完全离线，作为稳定基线。 |
+| `pidinet` | 仅 PiDiNet 深度边缘；需要本地权重。 |
+| `pidinet+canny` | PiDiNet 与 Canny 融合，默认深度候选。 |
+| `hed` / `hed+canny` | HED 单独或融合候选，适合与 PiDiNet 交叉验证。 |
+| `lsd` | 直线段候选，适合棱线清晰、背景线条少的输入。 |
+
+每个候选共享预处理、ROI 和 SAM2 结果，只独立计算边缘、剪影和线框。评分由边缘支持率、剪影覆盖质量、形状先验、几何有效性和 `fit_ready` 组成；它是可解释的自洽度分数，不等同于经过真值校准的统计概率。`--candidate-top-k` 控制每帧和第二阶段保留的候选数量。
+
+第一阶段的 `stage1_result.json` 会在每帧写入 `candidate_scores`；
+`geometry/standard_geometry_pixel.json` 会写入 `candidate_geometries`，其中
+`per_frame_ensemble` 是逐帧择优后的实际聚合结果，其余条目是算法候选的跨帧聚合结果。
 
 ### 第二阶段
 
@@ -40,6 +68,7 @@ uv run python backend/run.py stage2 \
   --stage1-geometry data/results/stage1/geometry/standard_geometry_pixel.json \
   --camera-parameters params/camera_parameters.json \
   --mode auto \
+  --selection-margin-threshold 0.05 \
   --output-dir data/results/stage2
 ```
 
@@ -56,6 +85,11 @@ uv run python backend/run.py stage2 \
 ```
 
 `auto` 优先使用完整的尺度锚点，否则尝试外参多视角模式。当前 `extrinsic_multiview` 只保留输入校验和清晰错误提示；单张外参本身可由 `calibration extrinsics` 生成并供单目针孔换算使用。
+
+第二阶段会读取第一阶段的候选几何，对每个候选执行公制换算、体积范围检查和
+1–70 cm 长度约束，再按 `0.65 × 第一阶段分数 + 0.35 × 物理一致性分数` 选择结果。
+结果写入 `stage2_metric.json` 的 `candidate_selection`。如果第一名和第二名的差值
+低于 `--selection-margin-threshold`，`ambiguous` 为 `true`；程序不会静默宣称结果准确。
 
 ### 完整流程
 
@@ -85,6 +119,9 @@ uv run python backend/run.py full <输入> \
 | `--no-localize` | 关闭 | 仅适合晶体占画面大部分时使用。 |
 | `--no-sam2` | 关闭 | 禁用 SAM2，完全使用传统边缘剪影，适合无权重/快速测试。 |
 | `--edge-backend` | `auto` | 自动比较深度边缘与 Canny；`canny` 最省资源、最容易复现。 |
+| `--edge-candidates` | `auto` | 逗号分隔的候选池；支持 `canny,pidinet,pidinet+canny,hed,hed+canny,lsd`。 |
+| `--candidate-top-k` | `3` | 每帧保留并交给第二阶段复评的候选数。 |
+| `--selection-margin-threshold` | `0.05` | 第二阶段第一、第二候选分差低于此值时标记 `ambiguous`。 |
 
 ### 线框和晶体形状
 

@@ -648,6 +648,7 @@ def _write_result_txt(layout: OutputLayout, summary: Dict[str, object]) -> None:
         f"输入: {summary['input']}",
         f"帧数: {summary['frame_count']}  fit_ready: {summary['fit_ready_count']}",
         f"边缘后端: {summary['edge_backend']}",
+        f"候选策略: {summary.get('selected_candidate', 'legacy')}",
         "",
         "标准像素几何（长方体 + 四棱锥）:",
         f"  length_px         = {g['length_px']:.2f}",

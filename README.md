@@ -134,10 +134,17 @@ uv run python -m calibration install-default \
 uv run python backend/run.py stage1 /path/to/input \
   --device auto \
   --edge-backend auto \
+  --edge-candidates auto \
+  --candidate-top-k 3 \
   --num-frames 7 \
   --output-dir data/results/stage1 \
   --clean-output
 ```
+
+`auto` 会按帧比较 `pidinet+canny` 与 `canny`；如果希望扩大候选池，可使用
+`--edge-candidates canny,pidinet+canny,hed+canny,lsd`。第一阶段会保存每帧候选的
+评分明细和跨帧聚合候选，第二阶段会再次结合尺度锚点、体积范围和 1–70 cm 物理约束
+复评，而不是盲目接受第一阶段的单一结果。
 
 只有在需要绝对尺寸时才运行第二阶段。若已有外参，会自动从参数文件取相机到目标的距离；若只有内参，推荐用一条实际可测的边作尺度锚点：
 
@@ -153,6 +160,10 @@ uv run python backend/run.py full /path/to/input \
 ```
 
 `--camera-parameters` 可省略，后端会按统一优先级读取。完整参数和默认值见 [backend/README.md](backend/README.md)。
+
+第二阶段结果中的 `candidate_selection` 包含最终候选、综合置信度、第一名与第二名的
+分数差和 `ambiguous` 标记。分数差低于 `--selection-margin-threshold` 时仍会返回
+最佳结果，但会明确提示候选接近，需要人工或更多视角复核。
 
 ## 单目重建与物理约束
 
