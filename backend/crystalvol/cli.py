@@ -23,6 +23,28 @@ from .config import (
 from .logging_utils import log, warn
 
 
+_EDGE_CANDIDATE_NAMES = {
+    "canny", "pidinet", "pidinet+canny", "hed", "hed+canny", "lsd",
+}
+
+
+def _parse_edge_candidates(value: str) -> list[str]:
+    """解析逗号分隔的候选后端；auto 交给后端使用默认候选集。"""
+    raw = value.strip().lower()
+    if not raw or raw == "auto":
+        return []
+    candidates = [item.strip() for item in raw.split(",") if item.strip()]
+    invalid = [item for item in candidates if item not in _EDGE_CANDIDATE_NAMES]
+    if invalid:
+        raise argparse.ArgumentTypeError(
+            "未知边缘候选：" + ", ".join(invalid) +
+            "；可选 canny,pidinet,pidinet+canny,hed,hed+canny,lsd"
+        )
+    if not candidates:
+        raise argparse.ArgumentTypeError("--edge-candidates 不能为空")
+    return list(dict.fromkeys(candidates))
+
+
 # ---------------------------------------------------------------------------
 # 参数组：多个子命令共享
 # ---------------------------------------------------------------------------
@@ -61,6 +83,11 @@ def _add_edge_args(p: argparse.ArgumentParser) -> None:
     g.add_argument("--deep-repo", default="lllyasviel/Annotators", help="PiDiNet/HED 权重的 HuggingFace 仓库。")
     g.add_argument("--canny-low", type=int, default=24, help="Canny 低阈值。默认 24。")
     g.add_argument("--canny-high", type=int, default=72, help="Canny 高阈值。默认 72。")
+    g.add_argument(
+        "--edge-candidates", type=_parse_edge_candidates, default=[],
+        help=("候选边缘后端，逗号分隔；auto 为 pidinet+canny,canny，"
+              "可选 canny,pidinet,pidinet+canny,hed,hed+canny,lsd。"),
+    )
 
 
 def _add_metric_args(p: argparse.ArgumentParser) -> None:
@@ -109,6 +136,7 @@ def _stage1_from_args(a: argparse.Namespace) -> Stage1Config:
             backend=a.edge_backend, fuse_canny=not a.no_fuse_canny,
             deep_threshold=a.deep_threshold, deep_input_max_side=a.deep_input_max_side,
             deep_repo=a.deep_repo, canny_low=a.canny_low, canny_high=a.canny_high, device=a.device,
+            candidate_backends=a.edge_candidates,
         ),
         segmentation=SegmentationConfig(
             enable=not a.no_sam2, world_conf=a.world_conf,
@@ -119,6 +147,7 @@ def _stage1_from_args(a: argparse.Namespace) -> Stage1Config:
             core_percentile=a.core_percentile,
         ),
         metric_anchor=_metric_from_args(a),
+        candidate_top_k=max(int(a.candidate_top_k), 1),
     )
 
 
@@ -152,6 +181,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="剪影相对 ROI 的最小面积占比。默认 0.06。")
         p.add_argument("--core-percentile", type=float, default=40.0,
                        help="亮核收紧：前景内亮度分位，越大越紧（把晶体从背光光晕里分离）。默认 40。")
+        p.add_argument("--candidate-top-k", type=int, default=3,
+                       help="每帧保留多少个候选供诊断和第二阶段复评。默认 3。")
         _add_preprocess_args(p)
         _add_localize_args(p)
         _add_edge_args(p)
@@ -172,6 +203,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_stage2.add_argument("--angles-file", default=None, help="每帧转台角度（extrinsic 模式用）。")
     p_stage2.add_argument("--expected-volume-min-m3", type=float, default=0.1, help="体积下限报警。默认 0.1。")
     p_stage2.add_argument("--expected-volume-max-m3", type=float, default=1.5, help="体积上限报警。默认 1.5。")
+    p_stage2.add_argument("--selection-margin-threshold", type=float, default=0.05,
+                          help="候选第一名与第二名分数差低于此值时标记不确定。默认 0.05。")
     _add_metric_args(p_stage2)
 
     # ---- full ----
@@ -185,6 +218,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_full.add_argument("--angles-file", default=None, help="每帧转台角度（extrinsic 模式用）。")
     p_full.add_argument("--expected-volume-min-m3", type=float, default=0.1, help="体积下限报警。默认 0.1。")
     p_full.add_argument("--expected-volume-max-m3", type=float, default=1.5, help="体积上限报警。默认 1.5。")
+    p_full.add_argument("--selection-margin-threshold", type=float, default=0.05,
+                        help="候选第一名与第二名分数差低于此值时标记不确定。默认 0.05。")
     return parser
 
 
@@ -213,6 +248,7 @@ def main(argv=None) -> int:
             angles_file=args.angles_file,
             expected_volume_min_m3=args.expected_volume_min_m3,
             expected_volume_max_m3=args.expected_volume_max_m3,
+            selection_margin_threshold=args.selection_margin_threshold,
         )
         try:
             run_stage2(cfg)
@@ -238,6 +274,7 @@ def main(argv=None) -> int:
             angles_file=args.angles_file,
             expected_volume_min_m3=args.expected_volume_min_m3,
             expected_volume_max_m3=args.expected_volume_max_m3,
+            selection_margin_threshold=args.selection_margin_threshold,
         )
         try:
             run_stage2(cfg)

@@ -98,6 +98,9 @@ class EdgeConfig:
     canny_low: int = 24
     canny_high: int = 72
     device: str = "auto"
+    # 空列表表示 auto：pidinet+canny 与 canny。显式列表可启用更多候选，
+    # 例如 ["canny", "pidinet+canny", "hed+canny", "lsd"]。
+    candidate_backends: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -177,6 +180,7 @@ class Stage1Config:
     frame_start_ratio: float = 0.0
     frame_end_ratio: float = 1.0
     max_session_frames: int = 120  # 实时会话只保留最近窗口，避免长期重拟合无限增长
+    candidate_top_k: int = 3        # 每帧写入结果 JSON、供第二阶段复评的候选数
 
     preprocess: PreprocessConfig = field(default_factory=PreprocessConfig)
     localize: LocalizeConfig = field(default_factory=LocalizeConfig)
@@ -202,3 +206,4 @@ class Stage2Config:
     angles_file: Optional[str] = None
     expected_volume_min_m3: float = 0.1
     expected_volume_max_m3: float = 1.5
+    selection_margin_threshold: float = 0.05  # 第一名与第二名差距低于此值则标记不确定

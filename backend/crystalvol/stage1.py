@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -24,7 +24,7 @@ import numpy as np
 
 from .config import Stage1Config
 from .edges import canny_edge_map, compute_edge_map
-from .geometry import build_vertices, edge_index_pairs
+from .geometry import build_vertices, compute_volume, edge_index_pairs
 from .io import InputFrame, OutputLayout, _imwrite, iter_inputs
 from .localize import RoiResult, locate_crystal
 from .logging_utils import log, section, warn
@@ -51,11 +51,111 @@ class FrameOutput:
     edge_backend: str
     sam2_used: bool
     warnings: List[str]
+    candidate_summaries: List[Dict[str, object]] = field(default_factory=list)
+    selected_candidate: str = ""
+    selection_confidence: float = 0.0
+    selection_margin: float = 0.0
 
 
 def _score_candidate(wf: WireframeResult) -> tuple:
     """多后端择优排序键：优先 fit_ready，其次可见比例、覆盖率。"""
     return (1 if wf.fit_ready else 0, wf.visible_ratio, wf.coverage_ratio)
+
+
+def _candidate_specs(cfg: Stage1Config) -> list[str]:
+    """返回一帧需要尝试的候选算法名称。
+
+    ``auto`` 保持原有行为：优先比较 pidinet+canny 与 canny。显式候选可以把
+    HED、PiDiNet 单独结果和 LSD 加入同一评分池，但不会改变预处理、ROI 或
+    SAM2 的共享结果。
+    """
+    configured = [str(item).strip().lower() for item in cfg.edge.candidate_backends if str(item).strip()]
+    if configured:
+        return list(dict.fromkeys(configured))
+    backend = cfg.edge.backend.strip().lower()
+    if backend == "auto":
+        return ["pidinet+canny", "canny"]
+    if backend in {"pidinet", "hed"} and cfg.edge.fuse_canny:
+        return [f"{backend}+canny"]
+    return [backend]
+
+
+def _candidate_edge_config(cfg: Stage1Config, candidate: str):
+    """把候选名称转换为边缘后端及是否融合 Canny 的配置。"""
+    if candidate.endswith("+canny"):
+        backend = candidate.removesuffix("+canny")
+        if backend not in {"pidinet", "hed"}:
+            raise ValueError(f"不支持的融合候选: {candidate}")
+        return backend, replace(cfg.edge, fuse_canny=True)
+    if candidate not in {"canny", "pidinet", "hed", "lsd"}:
+        raise ValueError(f"不支持的边缘候选: {candidate}")
+    # 显式写 pidinet/hed 表示深度边缘单独结果；融合版本必须写 +canny。
+    return candidate, replace(cfg.edge, fuse_canny=False)
+
+
+def _candidate_quality(
+    wf: WireframeResult,
+    cfg: Stage1Config,
+) -> tuple[float, dict[str, float]]:
+    """计算可解释的候选自洽度分数（0~1）。
+
+    这不是经过真值数据校准的统计概率，而是将边缘支持、剪影覆盖、形状先验
+    和几何有效性组合后的质量分。第二阶段会继续用物理约束复评。
+    """
+    visible = float(np.clip(wf.visible_ratio, 0.0, 1.0))
+    coverage = float(wf.coverage_ratio)
+    min_coverage = max(float(cfg.wireframe.min_coverage_ratio), 1e-6)
+    if coverage < min_coverage:
+        coverage_quality = float(np.clip(coverage / min_coverage, 0.0, 1.0))
+    elif coverage <= 0.75:
+        coverage_quality = float(np.clip(coverage / max(min_coverage * 3.0, 0.12), 0.0, 1.0))
+    else:
+        # 接近满幅的候选更容易把背景/黑条当成晶体，保留但降低可信度。
+        coverage_quality = float(np.clip(1.0 - (coverage - 0.75) / 0.25, 0.0, 1.0))
+    shape = float(np.clip(wf.geometry_px.get("shape_prior_confidence", 0.0), 0.0, 1.0))
+    geometry_values = [
+        wf.geometry_px.get(key, 0.0)
+        for key in ("length_px", "width_px", "body_height_px", "pyramid_height_px", "volume_px3")
+    ]
+    geometry_valid = 1.0 if all(np.isfinite(float(value)) and float(value) > 0 for value in geometry_values) else 0.0
+    ready = 1.0 if wf.fit_ready else 0.0
+    breakdown = {
+        "edge_support": visible,
+        "coverage_quality": coverage_quality,
+        "shape_prior": shape,
+        "geometry_validity": geometry_valid,
+        "fit_ready": ready,
+    }
+    score = (
+        0.35 * visible
+        + 0.15 * coverage_quality
+        + 0.20 * shape
+        + 0.15 * geometry_valid
+        + 0.15 * ready
+    )
+    return float(np.clip(score, 0.0, 1.0)), breakdown
+
+
+def _candidate_summary(
+    candidate: str,
+    edge_backend: str,
+    wf: WireframeResult,
+    score: float,
+    breakdown: dict[str, float],
+) -> Dict[str, object]:
+    return {
+        "candidate": candidate,
+        "backend_used": edge_backend,
+        "status": "ok",
+        "score": score,
+        "confidence": score,
+        "score_breakdown": breakdown,
+        "fit_ready": bool(wf.fit_ready),
+        "visible_ratio": float(wf.visible_ratio),
+        "coverage_ratio": float(wf.coverage_ratio),
+        "geometry_px": {key: float(value) for key, value in wf.geometry_px.items()},
+        "warnings": list(wf.warnings),
+    }
 
 
 def _shift_wireframe(wf: WireframeResult, dx: float, dy: float) -> WireframeResult:
@@ -66,6 +166,15 @@ def _shift_wireframe(wf: WireframeResult, dx: float, dy: float) -> WireframeResu
         fit_ready=wf.fit_ready, visible_ratio=wf.visible_ratio, coverage_ratio=wf.coverage_ratio,
         depth_source=wf.depth_source, warnings=wf.warnings,
     )
+
+
+def _release_candidate_buffers(out: FrameOutput) -> None:
+    """释放未入选候选的大数组；共享的输入帧和 ROI 不在这里清除。"""
+    out.enhanced_bgr = None
+    out.roi_bgr = None
+    out.edge_map = None
+    out.mask = None
+    out.silhouette_contour = None
 
 
 def _process_frame(frame: InputFrame, cfg: Stage1Config, segmenter: Optional[CrystalSegmenter]) -> FrameOutput:
@@ -96,28 +205,73 @@ def _process_frame(frame: InputFrame, cfg: Stage1Config, segmenter: Optional[Cry
             warn(f"[{frame.name}] SAM2 分割失败，转纯边缘剪影：{exc}")
 
     # 3) ROI 内多后端边缘 + 剪影 + 线框，按线框质量择优
-    backends_to_try = ["pidinet", "canny"] if cfg.edge.backend == "auto" else [cfg.edge.backend]
+    candidates_to_try = _candidate_specs(cfg)
     # 亮核收紧只针对「小晶体被背光光晕撑大」这个问题；大/满幅晶体本身就占大片，
     # 收紧会把它缩到最亮的一个刻面，因此大晶体不做亮核收紧。
     tighten_gray = None if roi.scale in ("large", "fullframe") else cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
     best: Optional[FrameOutput] = None
-    for backend in backends_to_try:
-        edge_result = compute_edge_map(roi_bgr, specular_roi, cfg.edge, backend=backend)
-        sil = extract_silhouette(edge_result.edge_map, sam2_mask,
-                                 roi_gray=tighten_gray, core_percentile=cfg.wireframe.core_percentile)
-        wf = fit_wireframe(sil, edge_result.edge_map, cfg.wireframe)
-        candidate = FrameOutput(
-            frame=frame, enhanced_bgr=pre.enhanced_bgr, roi=roi, roi_bgr=roi_bgr,
-            edge_map=edge_result.edge_map, mask=sil.mask, silhouette_contour=sil.contour,
-            wireframe=wf, edge_backend=edge_result.backend_used, sam2_used=sam2_used,
-            warnings=list(roi.warnings) + list(edge_result.warnings) + list(wf.warnings),
-        )
-        if best is None or _score_candidate(wf) > _score_candidate(best.wireframe):
-            best = candidate
+    best_summary: Dict[str, object] | None = None
+    candidate_summaries: list[Dict[str, object]] = []
+    for candidate_name in candidates_to_try:
+        try:
+            backend, edge_cfg = _candidate_edge_config(cfg, candidate_name)
+            edge_result = compute_edge_map(roi_bgr, specular_roi, edge_cfg, backend=backend)
+            sil = extract_silhouette(
+                edge_result.edge_map, sam2_mask,
+                roi_gray=tighten_gray, core_percentile=cfg.wireframe.core_percentile,
+            )
+            wf = fit_wireframe(sil, edge_result.edge_map, cfg.wireframe)
+            candidate = FrameOutput(
+                frame=frame, enhanced_bgr=pre.enhanced_bgr, roi=roi, roi_bgr=roi_bgr,
+                edge_map=edge_result.edge_map, mask=sil.mask, silhouette_contour=sil.contour,
+                wireframe=wf, edge_backend=edge_result.backend_used, sam2_used=sam2_used,
+                warnings=list(roi.warnings) + list(edge_result.warnings) + list(wf.warnings),
+            )
+            score, breakdown = _candidate_quality(wf, cfg)
+            summary = _candidate_summary(candidate_name, edge_result.backend_used, wf, score, breakdown)
+            candidate_summaries.append(summary)
+            if best is None or float(summary["score"]) > float(best_summary["score"]):
+                if best is not None:
+                    _release_candidate_buffers(best)
+                best = candidate
+                best_summary = summary
+            else:
+                _release_candidate_buffers(candidate)
+        except Exception as exc:  # noqa: BLE001
+            candidate_summaries.append({
+                "candidate": candidate_name,
+                "status": "failed",
+                "score": 0.0,
+                "confidence": 0.0,
+                "error": f"{type(exc).__name__}: {exc}",
+            })
     if best is None:
-        raise RuntimeError(f"[{frame.name}] 没有可用的边缘处理后端")
+        details = "；".join(
+            f"{item['candidate']}: {item.get('error', 'unknown error')}"
+            for item in candidate_summaries
+        )
+        raise RuntimeError(f"[{frame.name}] 没有可用的边缘候选。{details}")
+    successful = sorted(
+        (item for item in candidate_summaries if item.get("status") == "ok"),
+        key=lambda item: float(item.get("score", 0.0)),
+        reverse=True,
+    )
+    top_k = max(int(cfg.candidate_top_k), 1)
+    retained = successful[:top_k]
+    for rank, item in enumerate(retained, 1):
+        item["rank"] = rank
+        item["selected"] = str(item["candidate"]) == str(best_summary["candidate"])
+    # 保留失败候选的错误摘要，便于判断是算法没得分还是模型/权重不可用。
+    retained.extend(item for item in candidate_summaries if item.get("status") == "failed")
+    second_score = float(successful[1]["score"]) if len(successful) > 1 else 0.0
+    best.selected_candidate = str(best_summary["candidate"])
+    best.selection_confidence = float(best_summary["score"])
+    best.selection_margin = float(best_summary["score"]) - second_score
+    best.candidate_summaries = retained
     log(f"[{frame.name}] roi={roi.scale}({roi.area_ratio*100:.2f}%) sam2={sam2_used} "
-        f"backend={best.edge_backend} fit_ready={best.wireframe.fit_ready} "
+        f"backend={best.edge_backend} candidate={best.selected_candidate} "
+        f"confidence={best.selection_confidence:.3f} margin={best.selection_margin:.3f} "
+        f"fit_ready={best.wireframe.fit_ready} "
         f"visible={best.wireframe.visible_ratio:.2f} coverage={best.wireframe.coverage_ratio:.3f} "
         f"L={best.wireframe.geometry_px['length_px']:.0f} Hb={best.wireframe.geometry_px['body_height_px']:.0f} "
         f"Hp={best.wireframe.geometry_px['pyramid_height_px']:.0f} lowlight={pre.applied_lowlight}(luma={pre.mean_luma:.1f})")
@@ -173,6 +327,91 @@ def _consolidate_geometry(pool: List[FrameOutput]) -> Dict[str, float]:
         "total_height_px": body + pyramid,
         "volume_px3": compute_volume(length, width, body, pyramid),
     }
+
+
+def _consolidate_candidate_records(records: list[Dict[str, object]]) -> Dict[str, float]:
+    """把同一候选算法在多帧上的几何摘要做鲁棒聚合。"""
+    if not records:
+        raise ValueError("候选记录为空，无法聚合几何")
+    weights_all = np.asarray([
+        (0.5 + float(record.get("visible_ratio", 0.0)))
+        * (0.5 + min(float(record.get("coverage_ratio", 0.0)), 0.5))
+        * max(float(record.get("score", 0.0)), 0.1)
+        for record in records
+    ], dtype=np.float64)
+    keys = ("length_px", "width_px", "body_height_px", "pyramid_height_px")
+
+    def robust(key: str) -> float:
+        values = np.asarray([
+            float(dict(record.get("geometry_px", {})).get(key, 0.0))
+            for record in records
+        ], dtype=np.float64)
+        median = float(np.median(values))
+        mad = float(np.median(np.abs(values - median))) + 1e-6
+        keep = np.abs(values - median) <= 3.5 * mad
+        if not np.any(keep):
+            keep = np.ones(len(values), dtype=bool)
+        values = values[keep]
+        weights = weights_all[keep]
+        return float(np.sum(values * weights) / max(np.sum(weights), 1e-9))
+
+    length, width, body, pyramid = [robust(key) for key in keys]
+    return {
+        "length_px": length,
+        "width_px": width,
+        "body_height_px": body,
+        "pyramid_height_px": pyramid,
+        "total_height_px": body + pyramid,
+        "volume_px3": compute_volume(length, width, body, pyramid),
+    }
+
+
+def _candidate_geometry_options(pool: List[FrameOutput]) -> list[Dict[str, object]]:
+    """生成第二阶段可复评的候选几何集合。
+
+    ``per_frame_ensemble`` 是第一阶段逐帧择优后的实际结果；其余条目是同一
+    算法候选跨帧聚合后的备选结果。这样第二阶段可以用物理约束重新改判，且
+    不需要重新加载原始图片或模型。
+    """
+    groups: dict[str, list[Dict[str, object]]] = {"per_frame_ensemble": []}
+    for frame_output in pool:
+        selected = next(
+            (
+                item for item in frame_output.candidate_summaries
+                if item.get("status") == "ok" and item.get("selected")
+            ),
+            None,
+        )
+        if selected is None:
+            selected = {
+                "candidate": frame_output.selected_candidate or frame_output.edge_backend,
+                "score": frame_output.selection_confidence,
+                "visible_ratio": frame_output.wireframe.visible_ratio,
+                "coverage_ratio": frame_output.wireframe.coverage_ratio,
+                "geometry_px": frame_output.wireframe.geometry_px,
+            }
+        groups["per_frame_ensemble"].append(dict(selected))
+        for item in frame_output.candidate_summaries:
+            if item.get("status") != "ok":
+                continue
+            candidate_name = str(item.get("candidate", "unknown"))
+            groups.setdefault(candidate_name, []).append(item)
+
+    options: list[Dict[str, object]] = []
+    for candidate_name, records in groups.items():
+        geometry = _consolidate_candidate_records(records)
+        scores = np.asarray([float(item.get("score", 0.0)) for item in records], dtype=np.float64)
+        options.append({
+            "candidate": candidate_name,
+            "stage1_score": float(np.mean(scores)) if len(scores) else 0.0,
+            "stage1_score_std": float(np.std(scores)) if len(scores) else 0.0,
+            "frame_count": len(records),
+            "geometry_params_px": {
+                key: float(value) for key, value in geometry.items() if key != "volume_px3"
+            },
+            "volume_px3": float(geometry["volume_px3"]),
+        })
+    return sorted(options, key=lambda item: float(item["stage1_score"]), reverse=True)
 
 
 def run_stage1(cfg: Stage1Config) -> Dict[str, object]:
@@ -304,6 +543,7 @@ def finalize_stage1(cfg: Stage1Config, layout: OutputLayout,
     # 跨帧联合拟合出「一个」晶体几何
     pool = _select_consensus_pool(frame_outputs)
     geometry_px = _consolidate_geometry(pool)
+    candidate_options = _candidate_geometry_options(pool)
     pool_names = [f.frame.name for f in pool]
     representative = max(pool, key=lambda f: _score_candidate(f.wireframe))
     log(f"联合拟合使用 {len(pool)}/{len(frame_outputs)} 帧：{pool_names}；代表帧={representative.frame.name}")
@@ -326,6 +566,8 @@ def finalize_stage1(cfg: Stage1Config, layout: OutputLayout,
         "units": "pixel",
         "geometry_params_px": {k: v for k, v in geometry_px.items() if k != "volume_px3"},
         "volume_px3": geometry_px["volume_px3"],
+        "selected_candidate": "per_frame_ensemble",
+        "candidate_geometries": candidate_options,
         "depth_estimation_source": frame_outputs[0].wireframe.depth_source if frame_outputs else "none",
         "vertices_px": vertices.astype(float).tolist(),
         "edge_index_pairs": [list(e) for e in edge_index_pairs()],
@@ -354,6 +596,15 @@ def finalize_stage1(cfg: Stage1Config, layout: OutputLayout,
         "frame_count": len(frame_outputs),
         "fit_ready_count": fit_ready_count,
         "edge_backend": frame_outputs[0].edge_backend if frame_outputs else cfg.edge.backend,
+        "selected_candidate": "per_frame_ensemble",
+        "candidate_selection": {
+            "candidates": candidate_options,
+            "selection_margin": (
+                float(candidate_options[0]["stage1_score"])
+                - float(candidate_options[1]["stage1_score"])
+                if len(candidate_options) > 1 else 1.0
+            ),
+        },
         "consensus_frames": pool_names,
         "consensus_frame_count": len(pool_names),
         "representative_frame": representative.frame.name,
@@ -368,6 +619,10 @@ def finalize_stage1(cfg: Stage1Config, layout: OutputLayout,
                 "area_ratio": f.roi.area_ratio,
                 "sam2_used": f.sam2_used,
                 "fit_ready": f.wireframe.fit_ready,
+                "selected_candidate": f.selected_candidate or f.edge_backend,
+                "selection_confidence": f.selection_confidence,
+                "selection_margin": f.selection_margin,
+                "candidate_scores": f.candidate_summaries,
                 "visible_ratio": f.wireframe.visible_ratio,
                 "coverage_ratio": f.wireframe.coverage_ratio,
                 "geometry_px": f.wireframe.geometry_px,
