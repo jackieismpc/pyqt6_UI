@@ -133,6 +133,23 @@ def build_charuco_board(spec: BoardSpec):
     return board
 
 
+def build_charuco_detector(
+    board,
+    camera_matrix: np.ndarray | None = None,
+    distortion: np.ndarray | None = None,
+):
+    """构造官方 ChArUco detector，按是否有内参选择角点插值路径。"""
+    charuco_parameters = cv2.aruco.CharucoParameters()
+    charuco_parameters.tryRefineMarkers = False
+    if camera_matrix is not None:
+        charuco_parameters.cameraMatrix = np.asarray(camera_matrix, dtype=np.float64)
+    if distortion is not None:
+        charuco_parameters.distCoeffs = np.asarray(distortion, dtype=np.float64)
+    detector_parameters = cv2.aruco.DetectorParameters()
+    detector_parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_NONE
+    return cv2.aruco.CharucoDetector(board, charuco_parameters, detector_parameters)
+
+
 def build_object_points(spec: BoardSpec) -> np.ndarray:
     spec.validate()
     columns, rows = spec.pattern_size
@@ -285,6 +302,8 @@ def detect_pattern(
     image: np.ndarray,
     spec: BoardSpec,
     include_debug: bool = True,
+    camera_matrix: np.ndarray | None = None,
+    distortion: np.ndarray | None = None,
 ) -> Optional[PatternDetection]:
     spec.validate()
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
@@ -317,7 +336,7 @@ def detect_pattern(
         return PatternDetection(build_object_points(spec), image_points, debug, {"point_count": len(image_points)})
 
     board = build_charuco_board(spec)
-    detector = cv2.aruco.CharucoDetector(board)
+    detector = build_charuco_detector(board, camera_matrix=camera_matrix, distortion=distortion)
     charuco_corners, charuco_ids, marker_corners, marker_ids = detector.detectBoard(gray)
     if charuco_corners is None or charuco_ids is None or len(charuco_ids) < 6:
         return None
@@ -337,5 +356,14 @@ def detect_pattern(
         object_points,
         image_points,
         debug,
-        {"point_count": len(image_points), "marker_count": len(marker_ids) if marker_ids is not None else 0},
+        {
+            "point_count": len(image_points),
+            "marker_count": len(marker_ids) if marker_ids is not None else 0,
+            "interpolation": (
+                "pose_reprojection_with_intrinsics"
+                if camera_matrix is not None and distortion is not None
+                else "homography_without_intrinsics"
+            ),
+            "marker_corner_refinement": "none",
+        },
     )

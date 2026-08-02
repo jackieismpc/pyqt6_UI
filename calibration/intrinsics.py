@@ -262,7 +262,7 @@ def calibrate_intrinsics(
 
     calibration_metadata = {
         "method": (
-            "opencv_CharucoDetector+calibrateCameraExtended"
+            "opencv_CharucoDetector+Board.matchImagePoints+calibrateCameraExtended"
             if spec.pattern_type == "charuco"
             else "opencv_calibrateCameraExtended"
         ),
@@ -277,6 +277,10 @@ def calibrate_intrinsics(
             "length_unit": spec.length_unit,
             "charuco_pattern": "modern" if spec.pattern_type == "charuco" else None,
             "opencv_size_order": "columns(x) x rows(y)",
+            "charuco_interpolation": (
+                "homography_without_intrinsics" if spec.pattern_type == "charuco" else None
+            ),
+            "marker_corner_refinement": "none" if spec.pattern_type == "charuco" else None,
         },
         "reprojection_error_px": reprojection_error,
         "per_view_errors_px": [float(value) for value in per_view_errors],

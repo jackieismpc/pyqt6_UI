@@ -88,7 +88,12 @@ def calibrate_extrinsic(
     camera_matrix, distortion = _camera_matrix_for_image(
         payload, (int(image.shape[1]), int(image.shape[0]))
     )
-    detection = detect_pattern(image, spec)
+    detection = detect_pattern(
+        image,
+        spec,
+        camera_matrix=camera_matrix,
+        distortion=distortion,
+    )
     if detection is None:
         raise RuntimeError("外参图片中没有检测到完整的标定板")
     object_points = detection.object_points.astype(np.float64)
@@ -196,6 +201,10 @@ def calibrate_extrinsic(
             "marker_length": spec.marker_length,
             "dictionary": spec.dictionary,
             "charuco_pattern": "modern" if spec.pattern_type == "charuco" else None,
+            "charuco_interpolation": (
+                "pose_reprojection_with_intrinsics" if spec.pattern_type == "charuco" else None
+            ),
+            "marker_corner_refinement": "none" if spec.pattern_type == "charuco" else None,
             "reprojection_error_px": reprojection_error,
             "expected_distance": expected_distance,
             "distance_error": distance_error,
