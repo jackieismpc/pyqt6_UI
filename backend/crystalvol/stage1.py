@@ -146,6 +146,7 @@ def _candidate_summary(
     return {
         "candidate": candidate,
         "backend_used": edge_backend,
+        "fallback": edge_backend == "canny(fallback)",
         "status": "ok",
         "score": score,
         "confidence": score,
@@ -395,6 +396,10 @@ def _candidate_geometry_options(pool: List[FrameOutput]) -> list[Dict[str, objec
             if item.get("status") != "ok":
                 continue
             candidate_name = str(item.get("candidate", "unknown"))
+            if item.get("fallback") and str(item.get("backend_used", "")).startswith("canny"):
+                # 深度权重不可用时的结果与 Canny 是同一张证据图，不要在第二阶段
+                # 把它重复计算成两个互相竞争的候选。
+                candidate_name = "canny"
             groups.setdefault(candidate_name, []).append(item)
 
     options: list[Dict[str, object]] = []
