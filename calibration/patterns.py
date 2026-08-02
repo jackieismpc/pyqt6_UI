@@ -18,6 +18,10 @@ PATTERN_TYPES = (
     "asymmetric_circles_grid",
 )
 
+A4_SIZE_MM = (210.0, 297.0)
+PAPER_SIZES_MM = {"a4": A4_SIZE_MM}
+PAPER_ORIENTATIONS = ("portrait", "landscape")
+
 
 def parse_pattern_size(value: str) -> tuple[int, int]:
     raw = value.lower().replace(" ", "")
@@ -36,6 +40,39 @@ def unit_to_mm(value: float, unit: str) -> float:
     if key not in factors:
         raise ValueError("unit 只支持 mm、cm、m")
     return float(value) * factors[key]
+
+
+def paper_dimensions_mm(paper: str = "a4", orientation: str = "portrait") -> tuple[float, float]:
+    paper_key = paper.strip().lower()
+    orientation_key = orientation.strip().lower()
+    if paper_key not in PAPER_SIZES_MM:
+        raise ValueError(f"不支持的纸张尺寸: {paper}，当前只支持 a4")
+    if orientation_key not in PAPER_ORIENTATIONS:
+        raise ValueError(f"不支持的纸张方向: {orientation}，可选 portrait 或 landscape")
+    width_mm, height_mm = PAPER_SIZES_MM[paper_key]
+    if orientation_key == "landscape":
+        return height_mm, width_mm
+    return width_mm, height_mm
+
+
+def _mm_to_pixels(value_mm: float, dpi: int) -> int:
+    return max(1, round(float(value_mm) / 25.4 * dpi))
+
+
+def board_dimensions_mm(spec: BoardSpec) -> tuple[float, float]:
+    """返回标定图案本体的物理宽高，不含额外白边。"""
+    spec.validate()
+    columns, rows = spec.pattern_size
+    if spec.pattern_type == "charuco":
+        step_mm = unit_to_mm(float(spec.square_size), spec.length_unit)
+        return columns * step_mm, rows * step_mm
+    if spec.pattern_type == "chessboard":
+        step_mm = unit_to_mm(float(spec.square_size), spec.length_unit)
+        return (columns + 1) * step_mm, (rows + 1) * step_mm
+    step_mm = unit_to_mm(float(spec.circle_distance), spec.length_unit)
+    if spec.pattern_type == "asymmetric_circles_grid":
+        return (2 * (columns - 1) + 1) * step_mm, (rows - 1) * step_mm
+    return (columns - 1) * step_mm, (rows - 1) * step_mm
 
 
 @dataclass(frozen=True)
@@ -83,12 +120,17 @@ def _dictionary(name: str):
 
 def build_charuco_board(spec: BoardSpec):
     spec.validate()
-    return cv2.aruco.CharucoBoard(
+    board = cv2.aruco.CharucoBoard(
         spec.pattern_size,
         float(spec.square_size),
         float(spec.marker_length),
         _dictionary(spec.dictionary),
     )
+    # OpenCV 曾经存在 legacy ChArUco 模板。官方当前模板是 modern pattern，
+    # 显式设置以避免不同 OpenCV 版本使用不同默认值。
+    if hasattr(board, "setLegacyPattern"):
+        board.setLegacyPattern(False)
+    return board
 
 
 def build_object_points(spec: BoardSpec) -> np.ndarray:
@@ -147,10 +189,8 @@ def _draw_circle_grid(spec: BoardSpec, dpi: int, margin_mm: float) -> np.ndarray
     return image
 
 
-def draw_board(spec: BoardSpec, dpi: int = 300, margin_mm: float = 10.0) -> np.ndarray:
+def _draw_board_art(spec: BoardSpec, dpi: int, margin_mm: float) -> np.ndarray:
     spec.validate()
-    if dpi < 30:
-        raise ValueError("dpi 必须至少为 30")
     if spec.pattern_type == "chessboard":
         return _draw_chessboard(spec, dpi, margin_mm)
     if spec.pattern_type in {"circles_grid", "asymmetric_circles_grid"}:
@@ -158,9 +198,9 @@ def draw_board(spec: BoardSpec, dpi: int = 300, margin_mm: float = 10.0) -> np.n
 
     board = build_charuco_board(spec)
     square_mm = unit_to_mm(float(spec.square_size), spec.length_unit)
-    width_px = max(100, round(spec.pattern_size[0] * square_mm / 25.4 * dpi))
-    height_px = max(100, round(spec.pattern_size[1] * square_mm / 25.4 * dpi))
-    margin_px = max(1, round(margin_mm / 25.4 * dpi))
+    width_px = max(100, _mm_to_pixels(spec.pattern_size[0] * square_mm, dpi))
+    height_px = max(100, _mm_to_pixels(spec.pattern_size[1] * square_mm, dpi))
+    margin_px = max(0, _mm_to_pixels(margin_mm, dpi))
     return board.generateImage(
         (width_px + 2 * margin_px, height_px + 2 * margin_px),
         marginSize=margin_px,
@@ -168,7 +208,47 @@ def draw_board(spec: BoardSpec, dpi: int = 300, margin_mm: float = 10.0) -> np.n
     )
 
 
-def board_metadata(spec: BoardSpec, dpi: int, margin_mm: float) -> dict[str, Any]:
+def draw_board(
+    spec: BoardSpec,
+    dpi: int = 300,
+    margin_mm: float = 0.0,
+    paper: str = "a4",
+    orientation: str = "portrait",
+) -> np.ndarray:
+    spec.validate()
+    if dpi < 30:
+        raise ValueError("dpi 必须至少为 30")
+    if margin_mm < 0:
+        raise ValueError("margin-mm 不能为负数")
+    page_width_mm, page_height_mm = paper_dimensions_mm(paper, orientation)
+    board_width_mm, board_height_mm = board_dimensions_mm(spec)
+    rendered_width_mm = board_width_mm + 2.0 * float(margin_mm)
+    rendered_height_mm = board_height_mm + 2.0 * float(margin_mm)
+    if rendered_width_mm > page_width_mm or rendered_height_mm > page_height_mm:
+        raise ValueError(
+            f"标定板 {rendered_width_mm:.1f}x{rendered_height_mm:.1f} mm "
+            f"无法放入 {paper} {orientation} 页面 {page_width_mm:.1f}x{page_height_mm:.1f} mm"
+        )
+
+    art = _draw_board_art(spec, dpi, margin_mm)
+    page_width_px = _mm_to_pixels(page_width_mm, dpi)
+    page_height_px = _mm_to_pixels(page_height_mm, dpi)
+    page = np.full((page_height_px, page_width_px), 255, dtype=np.uint8)
+    offset_x = (page_width_px - art.shape[1]) // 2
+    offset_y = (page_height_px - art.shape[0]) // 2
+    page[offset_y:offset_y + art.shape[0], offset_x:offset_x + art.shape[1]] = art
+    return page
+
+
+def board_metadata(
+    spec: BoardSpec,
+    dpi: int,
+    margin_mm: float,
+    paper: str = "a4",
+    orientation: str = "portrait",
+) -> dict[str, Any]:
+    page_width_mm, page_height_mm = paper_dimensions_mm(paper, orientation)
+    board_width_mm, board_height_mm = board_dimensions_mm(spec)
     return {
         "pattern_type": spec.pattern_type,
         "pattern_size": list(spec.pattern_size),
@@ -179,8 +259,24 @@ def board_metadata(spec: BoardSpec, dpi: int, margin_mm: float) -> dict[str, Any
         "length_unit": spec.length_unit,
         "dpi": dpi,
         "margin_mm": margin_mm,
+        "paper": {
+            "name": paper.lower(),
+            "orientation": orientation.lower(),
+            "width_mm": page_width_mm,
+            "height_mm": page_height_mm,
+            "width_px": _mm_to_pixels(page_width_mm, dpi),
+            "height_px": _mm_to_pixels(page_height_mm, dpi),
+        },
+        "board_size_mm": {
+            "width": board_width_mm,
+            "height": board_height_mm,
+        },
+        "print_scale": 1.0,
+        "opencv_version": cv2.__version__,
+        "charuco_pattern": "modern" if spec.pattern_type == "charuco" else None,
         "opencv_pattern_size_meaning": (
-            "chessboard uses inner corners (columns x rows); charuco uses squares (columns x rows)"
+            "chessboard uses inner corners (columns x rows); charuco uses squares (columns x rows); "
+            "OpenCV official generator names the same dimensions rows x columns"
         ),
     }
 

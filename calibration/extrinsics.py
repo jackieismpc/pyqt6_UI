@@ -191,6 +191,11 @@ def calibrate_extrinsic(
         "last_extrinsic_calibration": {
             "method": method,
             "target_type": spec.pattern_type,
+            "pattern_size": list(spec.pattern_size),
+            "square_size": spec.square_size,
+            "marker_length": spec.marker_length,
+            "dictionary": spec.dictionary,
+            "charuco_pattern": "modern" if spec.pattern_type == "charuco" else None,
             "reprojection_error_px": reprojection_error,
             "expected_distance": expected_distance,
             "distance_error": distance_error,

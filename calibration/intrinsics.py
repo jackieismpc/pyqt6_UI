@@ -275,6 +275,8 @@ def calibrate_intrinsics(
             "marker_length": spec.marker_length,
             "dictionary": spec.dictionary,
             "length_unit": spec.length_unit,
+            "charuco_pattern": "modern" if spec.pattern_type == "charuco" else None,
+            "opencv_size_order": "columns(x) x rows(y)",
         },
         "reprojection_error_px": reprojection_error,
         "per_view_errors_px": [float(value) for value in per_view_errors],

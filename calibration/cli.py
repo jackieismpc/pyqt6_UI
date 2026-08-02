@@ -4,14 +4,22 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 from pathlib import Path
 
 import cv2
+from PIL import Image
 
 from .extrinsics import calibrate_extrinsic
 from .intrinsics import calibrate_intrinsics
-from .patterns import BoardSpec, PATTERN_TYPES, parse_pattern_size, draw_board, board_metadata
+from .patterns import (
+    BoardSpec,
+    PATTERN_TYPES,
+    board_metadata,
+    draw_board,
+    parse_pattern_size,
+)
 from .schema import load_parameters, save_parameters
 
 
@@ -21,10 +29,13 @@ DEFAULT_PARAMETERS = PROJECT_ROOT / "backend" / "crystalvol" / "defaults" / "cam
 # 项目实际使用 ChArUco。棋盘格仍然可通过 --type chessboard 显式选择，
 # 但所有不写 --type 的命令必须生成同一套 ChArUco 参数，避免板型和检测器错配。
 DEFAULT_PATTERN_TYPE = "charuco"
-DEFAULT_PATTERN_SIZE = "7x5"       # 方格列数 x 行数；与当前项目标定板一致
+DEFAULT_PATTERN_SIZE = "5x7"       # 方格列数 x 行数；对应 OpenCV 官方 rows=7, columns=5
 DEFAULT_SQUARE_SIZE = 30.0          # mm
-DEFAULT_MARKER_LENGTH = 22.0        # mm，约为方格边长的 73%
+DEFAULT_MARKER_LENGTH = 15.0        # mm，OpenCV 官方示例
 DEFAULT_DICTIONARY = "DICT_5X5_100"
+DEFAULT_PAPER = "a4"
+DEFAULT_ORIENTATION = "portrait"
+DEFAULT_MARGIN_MM = 0.0
 
 
 def _add_board_args(parser: argparse.ArgumentParser) -> None:
@@ -33,9 +44,11 @@ def _add_board_args(parser: argparse.ArgumentParser) -> None:
         help="标定板类型。默认 charuco。",
     )
     parser.add_argument(
-        "--pattern-size", default=DEFAULT_PATTERN_SIZE,
-        help="列x行；棋盘格表示内角点，ChArUco 表示方格。默认 7x5。",
+        "--pattern-size", default=None,
+        help="列x行的简写；ChArUco 官方示例为 rows=7, columns=5，即 5x7。",
     )
+    parser.add_argument("--columns", type=int, default=None, help="标定板列数（OpenCV x 方向）。")
+    parser.add_argument("--rows", type=int, default=None, help="标定板行数（OpenCV y 方向）。")
     parser.add_argument(
         "--square-size", type=float, default=DEFAULT_SQUARE_SIZE,
         help="棋盘格/ChArUco 方格边长（默认 30 mm）。",
@@ -43,7 +56,7 @@ def _add_board_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--circle-distance", type=float, default=30.0, help="圆点板相邻圆心距离。默认 30。")
     parser.add_argument(
         "--marker-length", type=float, default=DEFAULT_MARKER_LENGTH,
-        help="ChArUco marker 边长（默认 22 mm）。",
+        help="ChArUco marker 边长（默认 15 mm）。",
     )
     parser.add_argument(
         "--dictionary", default=DEFAULT_DICTIONARY,
@@ -53,9 +66,19 @@ def _add_board_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _spec(args: argparse.Namespace) -> BoardSpec:
+    if args.pattern_size is not None and (args.columns is not None or args.rows is not None):
+        raise ValueError("--pattern-size 不能与 --columns/--rows 同时使用")
+    if (args.columns is None) != (args.rows is None):
+        raise ValueError("--columns 和 --rows 必须同时提供")
+    if args.columns is not None and args.rows is not None:
+        if args.columns < 2 or args.rows < 2:
+            raise ValueError("columns 和 rows 都必须至少为 2")
+        pattern_size = (args.columns, args.rows)
+    else:
+        pattern_size = parse_pattern_size(args.pattern_size or DEFAULT_PATTERN_SIZE)
     return BoardSpec(
         pattern_type=args.pattern_type,
-        pattern_size=parse_pattern_size(args.pattern_size),
+        pattern_size=pattern_size,
         square_size=args.square_size,
         circle_distance=args.circle_distance,
         marker_length=args.marker_length,
@@ -74,8 +97,20 @@ def build_parser() -> argparse.ArgumentParser:
     board = sub.add_parser("board", help="生成可打印的棋盘格、ChArUco 或圆点板图片。")
     _add_board_args(board)
     board.add_argument("--dpi", type=int, default=300, help="输出打印分辨率。默认 300。")
-    board.add_argument("--margin-mm", type=float, default=10.0, help="外边距。默认 10 mm。")
-    board.add_argument("--output", default="data/calibration/charuco.png", help="输出图片路径。")
+    board.add_argument("--paper", choices=["a4"], default=DEFAULT_PAPER, help="打印纸张。默认 a4。")
+    board.add_argument(
+        "--orientation",
+        choices=["portrait", "landscape"],
+        default=DEFAULT_ORIENTATION,
+        help="纸张方向。默认 portrait（竖版）。",
+    )
+    board.add_argument(
+        "--margin-mm",
+        type=float,
+        default=DEFAULT_MARGIN_MM,
+        help="标定板图案外附加白边，不改变图案物理尺寸。默认 0 mm。",
+    )
+    board.add_argument("--output", default="data/calibration/charuco_a4.svg", help="输出 SVG/PNG 路径。")
 
     intrinsics = sub.add_parser("intrinsics", help="从图片目录标定内参并输出统一 JSON。")
     intrinsics.add_argument("image_dir", help="标定图片目录。")
@@ -119,10 +154,32 @@ def _write_board(output: str | Path, image, metadata: dict) -> Path:
     output_path = Path(output).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     suffix = output_path.suffix.lower() or ".png"
-    ok, encoded = cv2.imencode(suffix, image)
-    if not ok:
-        raise RuntimeError(f"无法保存标定板图片: {output_path}")
-    output_path.write_bytes(encoded.tobytes())
+    dpi = int(metadata["dpi"])
+    if suffix == ".svg":
+        ok, encoded = cv2.imencode(".png", image)
+        if not ok:
+            raise RuntimeError(f"无法编码 SVG 内嵌图像: {output_path}")
+        encoded_image = base64.b64encode(encoded.tobytes()).decode("ascii")
+        paper = metadata["paper"]
+        svg = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<svg xmlns="http://www.w3.org/2000/svg" '
+            f'width="{paper["width_mm"]}mm" height="{paper["height_mm"]}mm" '
+            f'viewBox="0 0 {paper["width_px"]} {paper["height_px"]}">\n'
+            f'  <image width="{paper["width_px"]}" height="{paper["height_px"]}" '
+            'preserveAspectRatio="none" '
+            f'href="data:image/png;base64,{encoded_image}" />\n'
+            '</svg>\n'
+        )
+        output_path.write_text(svg, encoding="utf-8")
+    elif suffix == ".png":
+        # Pillow 写入 DPI 元数据；仅依赖像素尺寸会让部分打印程序按屏幕 DPI 缩放。
+        Image.fromarray(image).save(output_path, format="PNG", dpi=(dpi, dpi))
+    else:
+        ok, encoded = cv2.imencode(suffix, image)
+        if not ok:
+            raise RuntimeError(f"无法保存标定板图片: {output_path}")
+        output_path.write_bytes(encoded.tobytes())
     metadata_path = output_path.with_suffix(".json")
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return output_path
@@ -136,8 +193,21 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "board":
         spec = _spec(args)
-        image = draw_board(spec, dpi=args.dpi, margin_mm=args.margin_mm)
-        output = _write_board(args.output, image, board_metadata(spec, args.dpi, args.margin_mm))
+        image = draw_board(
+            spec,
+            dpi=args.dpi,
+            margin_mm=args.margin_mm,
+            paper=args.paper,
+            orientation=args.orientation,
+        )
+        metadata = board_metadata(
+            spec,
+            args.dpi,
+            args.margin_mm,
+            paper=args.paper,
+            orientation=args.orientation,
+        )
+        output = _write_board(args.output, image, metadata)
         print(f"已生成标定板: {output}")
         print(f"已生成标定板参数: {output.with_suffix('.json')}")
         return 0
