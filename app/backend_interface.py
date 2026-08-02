@@ -55,6 +55,7 @@ class BackendInterface:
         self._session = None
         self._camera_config = camera_config or CameraConfig()
         self._camera_params = None
+        self._realtime_previous_length_cm: float | None = None
 
     @staticmethod
     def _load_backend_camera_parameters(parameter_path: str | None = None):
@@ -79,7 +80,11 @@ class BackendInterface:
         self._camera_params = params
         return camera_parameters_summary(params)
 
-    def _compute_metric(self, aggregate_geometry: dict) -> dict | None:
+    def _compute_metric(
+        self,
+        aggregate_geometry: dict,
+        previous_length_cm: float | None = None,
+    ) -> dict | None:
         if not aggregate_geometry or not aggregate_geometry.get("length_px"):
             return None
         if self._camera_params is None:
@@ -90,6 +95,7 @@ class BackendInterface:
         _ensure_backend_importable()
         from crystalvol.calibration import (  # noqa: WPS433
             apply_scale_anchor_correction,
+            apply_growth_constraints,
             pinhole_pixel_to_cm,
         )
 
@@ -110,7 +116,7 @@ class BackendInterface:
                 self._camera_config.scale_anchor_edge,
                 self._camera_config.scale_anchor_value,
             )
-        return metric
+        return apply_growth_constraints(metric, previous_length_cm)
 
     def _make_output_dir(self, save: bool, prefix: str) -> str:
         if save:
@@ -215,15 +221,24 @@ class BackendInterface:
 
         output_dir = self._make_output_dir(save, "crystalvol_rt_")
         self._session = Stage1Session(output_dir=output_dir, clean=True)
+        self._realtime_previous_length_cm = None
 
     def add_realtime_photo(self, image_bgr) -> Stage1Result:
         if self._session is None:
             self.start_realtime_session()
         summary = self._session.add_frame(image_bgr)
         result = self._load_result_dir(Path(summary["output_dir"]), data=summary)
-        metric = self._compute_metric(result.aggregate_geometry)
+        metric = self._compute_metric(
+            result.aggregate_geometry,
+            previous_length_cm=self._realtime_previous_length_cm,
+        )
         if metric:
             result.metric = metric
+            constraints = metric.get("physical_constraints", {})
+            if constraints.get("accepted_for_growth"):
+                self._realtime_previous_length_cm = float(
+                    metric["dimensions_cm"]["length"]
+                )
         return result
 
     def realtime_count(self) -> int:
@@ -231,3 +246,4 @@ class BackendInterface:
 
     def end_realtime_session(self) -> None:
         self._session = None
+        self._realtime_previous_length_cm = None

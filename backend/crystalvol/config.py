@@ -131,8 +131,9 @@ class WireframeConfig:
     # 线族聚类
     vertical_angle_tol: float = 18.0     # 竖直棱线角度容差（deg）
     horizontal_angle_tol: float = 22.0   # 水平棱线角度容差（deg）
-    # 单视角深度启发式：width = depth_ratio * length（无法观测侧向深度时的默认比例）
-    depth_ratio: float = 0.9             # 宽度/长度比；典型晶体接近正方形截面（0.8–1.0）
+    # 单视角深度先验范围：由观测到的高宽比自动选择，不暴露给用户逐次调整。
+    shape_prior_min_depth_ratio: float = 0.55
+    shape_prior_max_depth_ratio: float = 1.25
     # 四棱锥屋顶检测
     pyramid_top_width_ratio: float = 0.7  # 顶部宽度 < 该比例×满宽 才认为有屋顶（越小越严格）
     pyramid_min_taper_ratio: float = 0.06 # 渐缩段高度 ≥ 该比例×总高 才认为有屋顶

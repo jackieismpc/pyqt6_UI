@@ -21,6 +21,12 @@ from .camera_parameters import (
     save_camera_calibration,
     save_camera_parameters,
 )
+from .physical_constraints import (
+    MAX_CRYSTAL_LENGTH_CM,
+    MAX_REALTIME_SHRINK_RATIO,
+    MIN_CRYSTAL_LENGTH_CM,
+    apply_growth_constraints,
+)
 
 __all__ = [
     "CameraCalibration",
@@ -37,4 +43,8 @@ __all__ = [
     "resolve_camera_parameters_path",
     "save_camera_calibration",
     "save_camera_parameters",
+    "MIN_CRYSTAL_LENGTH_CM",
+    "MAX_CRYSTAL_LENGTH_CM",
+    "MAX_REALTIME_SHRINK_RATIO",
+    "apply_growth_constraints",
 ]

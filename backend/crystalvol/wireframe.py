@@ -17,7 +17,8 @@
     length_px         = 长方体区域中位宽度（前向长度）
     body_height_px    = base_y - shoulder_y
     pyramid_height_px = shoulder_y - apex_y
-    width_px（侧向深度）：单视角不可直接观测，按比例启发式给出（第二阶段可用尺度锚点修正）
+    width_px（侧向深度）：单视角不可直接观测，根据剪影的高宽比和屋顶比例
+    在晶体形状先验范围内自适应估计（第二阶段可用尺度锚点或外参进一步修正）
 
 该方法对断裂棱线、反光不敏感，且总能给出 best-effort 结果，保证三张图一定能产出。
 """
@@ -88,6 +89,42 @@ def _edge_support(edge_map: np.ndarray, p: Tuple[float, float], q: Tuple[float, 
     return hits / float(n)
 
 
+def _adaptive_depth_ratio(
+    total_height_px: float,
+    length_px: float,
+    pyramid_height_px: float,
+    cfg: WireframeConfig,
+) -> Tuple[float, float, float]:
+    """按观测形状选择侧向深度先验。
+
+    单目图像无法从数学上唯一恢复被遮挡的侧向深度，因此这里不再要求用户
+    为每个晶体手工输入一个固定比例，而是使用可解释的形状先验：越高瘦的
+    剪影通常对应较小的深度比例，越接近方形/盒状的剪影对应较大的比例。
+    返回 ``(depth_ratio, vertical_ratio, confidence)``。
+    """
+    safe_length = max(float(length_px), 1.0)
+    vertical_ratio = max(float(total_height_px), 0.0) / safe_length
+    min_ratio = min(float(cfg.shape_prior_min_depth_ratio), float(cfg.shape_prior_max_depth_ratio))
+    max_ratio = max(float(cfg.shape_prior_min_depth_ratio), float(cfg.shape_prior_max_depth_ratio))
+
+    # 0.8~2.8 覆盖从近方形到明显高瘦的大多数视野比例；超出范围时饱和，
+    # 避免少量分割噪声把三维尺寸推到不合理的极端。
+    tallness = float(np.clip((vertical_ratio - 0.8) / 2.0, 0.0, 1.0))
+    depth_ratio = max_ratio - tallness * (max_ratio - min_ratio)
+
+    roof_fraction = float(np.clip(float(pyramid_height_px) / max(float(total_height_px), 1.0), 0.0, 1.0))
+    # 屋顶占比能轻微区分同一高宽比下的盒状与尖顶形状，但只作小幅修正，
+    # 不让屋顶检测结果主导不可观测的深度。
+    depth_ratio *= 1.0 + 0.08 * (roof_fraction - 0.2)
+    depth_ratio = float(np.clip(depth_ratio, min_ratio, max_ratio))
+
+    # 形状越接近先验范围中部，估计越稳定；极端细长/扁平时降低置信度，
+    # 供 UI 和后续质量控制识别，而不是静默地把启发式结果当成精确测量。
+    confidence = 1.0 - abs(tallness - 0.5) * 0.45
+    confidence = float(np.clip(confidence, 0.35, 1.0))
+    return depth_ratio, vertical_ratio, confidence
+
+
 def fit_wireframe(
     silhouette: SilhouetteResult,
     edge_map: np.ndarray,
@@ -110,7 +147,7 @@ def fit_wireframe(
     max_width = float(width_smooth[apex_y:base_y + 1].max())
     if max_width <= 1.0:
         warnings.append("剪影宽度异常，退化为包围盒估计。")
-        return _bbox_fallback(mask, edge_map, warnings)
+        return _bbox_fallback(mask, edge_map, warnings, cfg)
 
     total_h = float(base_y - apex_y)
     # 肩线：从顶部往下，宽度首次达到 0.85*满宽
@@ -166,11 +203,16 @@ def fit_wireframe(
     supports = [_edge_support(evidence, points[a], points[b]) for a, b in observed_edges]
     visible_ratio = float(np.mean([1.0 if s > 0.35 else 0.0 for s in supports]))
 
-    # 侧向深度：单视角启发式（比例由 cfg.depth_ratio 控制）
-    width_px = cfg.depth_ratio * length_px
-    depth_source = "single_view_ratio_heuristic"
-
     total_height_px = body_height_px + pyramid_height_px
+    width_px, vertical_ratio, shape_confidence = _adaptive_depth_ratio(
+        total_height_px,
+        length_px,
+        pyramid_height_px,
+        cfg,
+    )
+    width_px *= length_px
+    depth_source = "adaptive_single_view_shape_prior"
+
     volume_px3 = compute_volume(length_px, width_px, body_height_px, pyramid_height_px)
     geometry_px = {
         "length_px": length_px,
@@ -178,6 +220,9 @@ def fit_wireframe(
         "body_height_px": body_height_px,
         "pyramid_height_px": pyramid_height_px,
         "total_height_px": total_height_px,
+        "vertical_to_length_ratio": vertical_ratio,
+        "depth_ratio_estimate": width_px / max(length_px, 1.0),
+        "shape_prior_confidence": shape_confidence,
         "volume_px3": volume_px3,
     }
 
@@ -206,18 +251,30 @@ def fit_wireframe(
 
 def _empty_geometry() -> Dict[str, float]:
     return {k: 0.0 for k in
-            ("length_px", "width_px", "body_height_px", "pyramid_height_px", "total_height_px", "volume_px3")}
+            ("length_px", "width_px", "body_height_px", "pyramid_height_px", "total_height_px",
+             "vertical_to_length_ratio", "depth_ratio_estimate", "shape_prior_confidence", "volume_px3")}
 
 
-def _bbox_fallback(mask: np.ndarray, edge_map: np.ndarray, warnings: List[str]) -> WireframeResult:
-    """极端兜底：用外接框 + 固定比例假设一个几何体，保证有输出。"""
+def _bbox_fallback(
+    mask: np.ndarray,
+    edge_map: np.ndarray,
+    warnings: List[str],
+    cfg: WireframeConfig,
+) -> WireframeResult:
+    """极端兜底：用外接框 + 自适应形状先验，保证有输出。"""
     ys, xs = np.where(mask > 0)
     x1, x2, y1, y2 = int(xs.min()), int(xs.max()), int(ys.min()), int(ys.max())
     length_px = float(x2 - x1)
     total_h = float(y2 - y1)
     pyramid_height_px = 0.3 * total_h
     body_height_px = total_h - pyramid_height_px
-    width_px = 0.9 * length_px
+    width_ratio, vertical_ratio, shape_confidence = _adaptive_depth_ratio(
+        total_h,
+        length_px,
+        pyramid_height_px,
+        cfg,
+    )
+    width_px = width_ratio * length_px
     apex = ((x1 + x2) * 0.5, float(y1))
     points = {
         "apex": apex,
@@ -231,7 +288,11 @@ def _bbox_fallback(mask: np.ndarray, edge_map: np.ndarray, warnings: List[str]) 
     geometry_px = {
         "length_px": length_px, "width_px": width_px,
         "body_height_px": body_height_px, "pyramid_height_px": pyramid_height_px,
-        "total_height_px": total_h, "volume_px3": compute_volume(length_px, width_px, body_height_px, pyramid_height_px),
+        "total_height_px": total_h,
+        "vertical_to_length_ratio": vertical_ratio,
+        "depth_ratio_estimate": width_ratio,
+        "shape_prior_confidence": shape_confidence,
+        "volume_px3": compute_volume(length_px, width_px, body_height_px, pyramid_height_px),
     }
     warnings.append("使用外接框兜底几何。")
     return WireframeResult(points, edges, geometry_px, False, 0.0,
