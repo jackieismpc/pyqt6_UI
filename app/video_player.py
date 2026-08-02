@@ -7,8 +7,8 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtCore import QByteArray, QBuffer, QIODevice, QSize, Qt, QTimer
+from PyQt6.QtGui import QImage, QImageReader, QPixmap
 from PyQt6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 try:
@@ -17,7 +17,7 @@ try:
 except ImportError:
     _HAS_CV2 = False
 
-from .path_utils import video_capture_safe
+from .path_utils import pixmap_from_path, video_capture_safe
 
 
 class VideoPlayer(QWidget):
@@ -90,13 +90,28 @@ class VideoPlayer(QWidget):
         if not path:
             self._label.setText("（无图像）")
             return
-        # 跨平台安全加载
-        pixmap = QPixmap()
-        try:
-            with open(path, "rb") as fh:
-                pixmap.loadFromData(fh.read())
-        except (OSError, ValueError):
-            pixmap = QPixmap()
+        # 读取时就限制解码尺寸，避免公共入口意外持有完整原图。
+        def read(reader: QImageReader) -> QPixmap:
+            reader.setAutoTransform(True)
+            original = reader.size()
+            if original.isValid() and max(original.width(), original.height()) > self._max_preview_side:
+                scale = self._max_preview_side / float(max(original.width(), original.height()))
+                reader.setScaledSize(QSize(
+                    max(1, round(original.width() * scale)),
+                    max(1, round(original.height() * scale)),
+                ))
+            image = reader.read()
+            return QPixmap.fromImage(image) if not image.isNull() else QPixmap()
+
+        pixmap = read(QImageReader(path))
+        if pixmap.isNull():
+            encoded = pixmap_from_path(path)
+            if encoded is not None:
+                buffer = QBuffer()
+                buffer.setData(QByteArray(encoded))
+                buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+                pixmap = read(QImageReader(buffer))
+                buffer.close()
         if pixmap.isNull():
             self._label.setText("（图像加载失败）")
             return
@@ -113,6 +128,13 @@ class VideoPlayer(QWidget):
             self._label.setText("（无图像）")
             return
         import numpy as np
+        if max(array.shape[:2]) > self._max_preview_side:
+            array = cv2.resize(
+                array,
+                (max(1, round(array.shape[1] * self._max_preview_side / max(array.shape[:2]))),
+                 max(1, round(array.shape[0] * self._max_preview_side / max(array.shape[:2])))),
+                interpolation=cv2.INTER_AREA,
+            )
         if not array.flags["C_CONTIGUOUS"]:
             array = np.ascontiguousarray(array)
         h, w = array.shape[:2]

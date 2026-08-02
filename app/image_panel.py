@@ -99,6 +99,16 @@ class ScaledImageLabel(QLabel):
         if array is None or getattr(array, "size", 0) == 0:
             self._show_placeholder()
             return
+        if max(array.shape[:2]) > MAX_STATIC_PREVIEW_SIDE:
+            # 即使调用方忘记预缩放，也不要把工业相机原始大帧转成 QPixmap。
+            import cv2
+
+            scale = MAX_STATIC_PREVIEW_SIDE / float(max(array.shape[:2]))
+            array = cv2.resize(
+                array,
+                (max(1, round(array.shape[1] * scale)), max(1, round(array.shape[0] * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
         if not array.flags["C_CONTIGUOUS"]:
             array = np.ascontiguousarray(array)
         h, w = array.shape[:2]
