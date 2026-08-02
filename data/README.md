@@ -14,10 +14,12 @@
 
 ```text
 data/calibration/
-├── board.png/.json       生成的标定板和元数据
+├── charuco_a4.svg/.json  OpenCV 官方 ChArUco A4 竖版打印板和元数据
 ├── intrinsics/           内参标定图片
 ├── intrinsics_debug/     角点/圆点检测调试图
 └── pose/                 用于单图外参的图片和坐标轴调试图
 ```
+
+当前官方 ChArUco 板为 5 列×7 行、30 mm 方格、15 mm marker、`DICT_5X5_100`，页面为 A4 竖版。打印优先使用 SVG，并选择实际大小/100%，不要选择适应页面；打印后应测量方格边长。旧版标定参数或旧板图片只能作为历史备份，不能与新板混用。
 
 模型权重不放在这里，统一放在 `backend/weights/` 并由 Git LFS 跟踪。
