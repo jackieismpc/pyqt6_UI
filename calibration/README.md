@@ -112,6 +112,18 @@ uv run python -m calibration intrinsics data/calibration/intrinsics \
   --debug-dir data/calibration/intrinsics_debug
 ```
 
+如果已确认镜头标称焦距和相机像元尺寸，可以把物理信息作为初始值加入优化：
+
+```bash
+uv run python -m calibration intrinsics data/calibration/intrinsics \
+  --type charuco --columns 5 --rows 7 \
+  --square-size 30 --marker-length 15 --dictionary DICT_5X5_100 \
+  --focal-length-mm 8 --pixel-size-um 4.5 \
+  --output params/camera_parameters.json
+```
+
+`8 mm / 4.5 μm` 会换算为约 `1778 px` 的初始 `fx/fy`。默认模式是 `initial_guess`，OpenCV 仍会根据图片优化有效焦距；这比强行固定镜筒标称值更安全，因为手动对焦位置会改变有效焦距。只有确认焦距、像元尺寸和对焦位置后，才加 `--fix-focal-length`。调整对焦环后必须重新标定。
+
 内参参数：
 
 - `image_dir`：图片目录；`--recursive` 允许递归读取子目录；
@@ -119,6 +131,9 @@ uv run python -m calibration intrinsics data/calibration/intrinsics \
 - `--fix-aspect-ratio`：固定 `fx/fy` 比例；只有明确知道像素非方形或已有可靠初值时使用；
 - `--zero-tangent-dist`：固定切向畸变为 0，镜头确实满足该假设时使用；
 - `--fix-principal-point`：固定主点为初始估计值；通常不要启用；
+- `--focal-length-mm`：镜头标称物理焦距，必须和 `--pixel-size-um` 同时提供；用于物理初始值，不默认固定；
+- `--pixel-size-um`：传感器像元尺寸，单位微米；当前疑似 CH250 相机可填写 `4.5`，其他相机使用实际规格；
+- `--fix-focal-length`：固定物理焦距换算出的 `fx/fy`；手动调焦镜头通常不要使用；
 - `--max-view-error`：单视图重投影误差阈值，默认 2 px；
 - `--max-rounds`：异常图剔除迭代次数，默认 3；
 - `--min-views`：最少有效视图，默认 5；建议实际拍摄数量远大于它；

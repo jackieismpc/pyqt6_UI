@@ -113,6 +113,7 @@ def _calibration_flags(
     fix_aspect_ratio: bool,
     zero_tangent_dist: bool,
     fix_principal_point: bool,
+    fix_focal_length: bool,
 ) -> int:
     flags = 0
     if model == "rational":
@@ -123,7 +124,32 @@ def _calibration_flags(
         flags |= cv2.CALIB_ZERO_TANGENT_DIST
     if fix_principal_point:
         flags |= cv2.CALIB_FIX_PRINCIPAL_POINT
+    if fix_focal_length:
+        flags |= cv2.CALIB_FIX_FOCAL_LENGTH
     return flags
+
+
+def _physical_initial_camera_matrix(
+    image_size: tuple[int, int],
+    focal_length_mm: float,
+    pixel_size_um: float,
+) -> tuple[np.ndarray, float]:
+    """Convert an approximate physical focal length into an OpenCV initial K."""
+    if focal_length_mm <= 0:
+        raise ValueError("focal-length-mm 必须为正数")
+    if pixel_size_um <= 0:
+        raise ValueError("pixel-size-um 必须为正数")
+    focal_length_px = float(focal_length_mm) * 1000.0 / float(pixel_size_um)
+    width, height = image_size
+    matrix = np.array(
+        [
+            [focal_length_px, 0.0, (width - 1) / 2.0],
+            [0.0, focal_length_px, (height - 1) / 2.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    return matrix, focal_length_px
 
 
 def _run_calibration(
@@ -132,11 +158,15 @@ def _run_calibration(
     flags: int,
     max_iterations: int,
     epsilon: float,
+    initial_camera_matrix: np.ndarray | None = None,
 ):
     object_points = [view.detection.object_points.astype(np.float32) for view in views]
     image_points = [view.detection.image_points.astype(np.float32) for view in views]
     camera_matrix = None
-    if flags & (cv2.CALIB_FIX_ASPECT_RATIO | cv2.CALIB_FIX_PRINCIPAL_POINT):
+    if initial_camera_matrix is not None:
+        camera_matrix = np.asarray(initial_camera_matrix, dtype=np.float64).copy()
+        flags |= cv2.CALIB_USE_INTRINSIC_GUESS
+    elif flags & (cv2.CALIB_FIX_ASPECT_RATIO | cv2.CALIB_FIX_PRINCIPAL_POINT):
         camera_matrix = cv2.initCameraMatrix2D(object_points, image_points, image_size, 0)
         flags |= cv2.CALIB_USE_INTRINSIC_GUESS
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_COUNT, max_iterations, epsilon)
@@ -184,6 +214,9 @@ def calibrate_intrinsics(
     fix_aspect_ratio: bool = False,
     zero_tangent_dist: bool = False,
     fix_principal_point: bool = False,
+    focal_length_mm: float | None = None,
+    pixel_size_um: float | None = None,
+    fix_focal_length: bool = False,
     reject_outliers: bool = True,
     max_view_error: float = 2.0,
     max_rounds: int = 3,
@@ -194,6 +227,10 @@ def calibrate_intrinsics(
 ) -> dict[str, Any]:
     if model not in {"standard", "rational"}:
         raise ValueError("model 只支持 standard 或 rational")
+    if (focal_length_mm is None) != (pixel_size_um is None):
+        raise ValueError("--focal-length-mm 和 --pixel-size-um 必须同时提供")
+    if fix_focal_length and focal_length_mm is None:
+        raise ValueError("固定物理焦距时必须同时提供 focal-length-mm 和 pixel-size-um")
     if min_views < 3:
         raise ValueError("min-views 不能小于 3")
     paths = collect_images(image_dir, recursive=recursive)
@@ -222,12 +259,29 @@ def calibrate_intrinsics(
                 # 调试图已经落盘，不要在标定优化期间继续保留每张原尺寸图像。
                 view.detection.debug_image = None
 
-    flags = _calibration_flags(model, fix_aspect_ratio, zero_tangent_dist, fix_principal_point)
+    flags = _calibration_flags(
+        model,
+        fix_aspect_ratio,
+        zero_tangent_dist,
+        fix_principal_point,
+        fix_focal_length,
+    )
+    initial_camera_matrix = None
+    initial_focal_length_px = None
+    if focal_length_mm is not None and pixel_size_um is not None:
+        initial_camera_matrix, initial_focal_length_px = _physical_initial_camera_matrix(
+            image_size, focal_length_mm, pixel_size_um
+        )
     rejected_outliers: list[str] = []
     calibration_result = None
     for round_index in range(max_rounds + 1):
         calibration_result = _run_calibration(
-            views, image_size, flags, max_iterations=max_iterations, epsilon=epsilon
+            views,
+            image_size,
+            flags,
+            max_iterations=max_iterations,
+            epsilon=epsilon,
+            initial_camera_matrix=initial_camera_matrix,
         )
         errors = calibration_result[-1]
         if not reject_outliers or round_index >= max_rounds:
@@ -289,6 +343,17 @@ def calibrate_intrinsics(
         "outlier_rejected_images": rejected_outliers,
         "flags": int(flags),
     }
+    if focal_length_mm is not None and pixel_size_um is not None:
+        calibration_metadata["focal_length_constraint"] = {
+            "physical_focal_length_mm": float(focal_length_mm),
+            "pixel_size_um": float(pixel_size_um),
+            "initial_focal_length_px": float(initial_focal_length_px),
+            "mode": "fixed" if fix_focal_length else "initial_guess",
+            "estimated_focal_length_mm": {
+                "fx": float(matrix[0, 0]) * float(pixel_size_um) / 1000.0,
+                "fy": float(matrix[1, 1]) * float(pixel_size_um) / 1000.0,
+            },
+        }
     payload = make_intrinsics_payload(
         matrix, distortion, image_size, extrinsics, calibration_metadata
     )

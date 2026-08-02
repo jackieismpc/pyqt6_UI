@@ -103,6 +103,18 @@ uv run python -m calibration intrinsics data/calibration/intrinsics \
   --debug-dir data/calibration/intrinsics_debug
 ```
 
+如果使用当前相机的镜头标称焦距和像元尺寸，可以把它们作为物理初始值传给 OpenCV：
+
+```bash
+uv run python -m calibration intrinsics data/calibration/intrinsics \
+  --type charuco --columns 5 --rows 7 \
+  --square-size 30 --marker-length 15 --dictionary DICT_5X5_100 \
+  --focal-length-mm 8 --pixel-size-um 4.5 \
+  --output params/camera_parameters.json
+```
+
+这里的 `8 mm` 只作为初始猜测，默认仍允许 OpenCV 根据图片优化有效焦距；不要因为镜筒标的是 8 mm 就直接固定它。只有镜头型号、对焦位置和像元尺寸都已确认，并且实测结果与 8 mm 一致时，才额外使用 `--fix-focal-length`。调整手动对焦环后应重新标定，不能继续复用旧内参。
+
 程序使用 OpenCV `CharucoDetector`、`Board.matchImagePoints` 和 `calibrateCameraExtended`，默认按单视图重投影误差剔除明显异常图，输出内参、畸变、每张图的外参、重投影误差和接受/剔除列表。
 
 如果提示有效标定图为 0，先检查生成板时的列、行、方格边长、marker 边长和字典是否完全一致。旋转同一块板不需要交换列行。旧版项目生成的 `7x5 + marker-length=22` 图片不能与新的官方 `5x7 + marker-length=15` 规格混用，应重新打印和拍摄。

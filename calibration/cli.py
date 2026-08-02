@@ -120,6 +120,23 @@ def build_parser() -> argparse.ArgumentParser:
     intrinsics.add_argument("--fix-aspect-ratio", action="store_true", help="固定 fx/fy 比例。")
     intrinsics.add_argument("--zero-tangent-dist", action="store_true", help="固定切向畸变为 0。")
     intrinsics.add_argument("--fix-principal-point", action="store_true", help="固定主点为初始估计值。")
+    intrinsics.add_argument(
+        "--focal-length-mm",
+        type=float,
+        default=None,
+        help="镜头标称物理焦距，作为 OpenCV 初始焦距；例如 8。必须同时提供 --pixel-size-um。",
+    )
+    intrinsics.add_argument(
+        "--pixel-size-um",
+        type=float,
+        default=None,
+        help="相机像元尺寸（微米）；例如当前 CH250 相机约为 4.5。",
+    )
+    intrinsics.add_argument(
+        "--fix-focal-length",
+        action="store_true",
+        help="固定由物理焦距换算出的 fx/fy；只有经过实测确认时使用，默认允许 OpenCV 优化。",
+    )
     intrinsics.add_argument("--no-reject-outliers", action="store_true", help="关闭按单视图重投影误差剔除异常图。")
     intrinsics.add_argument("--max-view-error", type=float, default=2.0, help="异常视图最大重投影误差（像素）。默认 2.0。")
     intrinsics.add_argument("--max-rounds", type=int, default=3, help="异常视图剔除最多迭代次数。默认 3。")
@@ -223,6 +240,9 @@ def main(argv: list[str] | None = None) -> int:
             fix_aspect_ratio=args.fix_aspect_ratio,
             zero_tangent_dist=args.zero_tangent_dist,
             fix_principal_point=args.fix_principal_point,
+            focal_length_mm=args.focal_length_mm,
+            pixel_size_um=args.pixel_size_um,
+            fix_focal_length=args.fix_focal_length,
             reject_outliers=not args.no_reject_outliers,
             max_view_error=args.max_view_error,
             max_rounds=args.max_rounds,
