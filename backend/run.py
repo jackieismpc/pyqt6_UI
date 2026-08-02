@@ -4,8 +4,8 @@
 
 用法：
     python run.py stage1 <输入图/目录/视频> [选项]      # 只跑第一阶段
-    python run.py stage2 --stage1-geometry <json> --camera-calibration <json> [选项]
-    python run.py full   <输入> --camera-calibration <json> [选项]   # 一二阶段串跑
+    python run.py stage2 --stage1-geometry <json> --camera-parameters <json> [选项]
+    python run.py full   <输入> --camera-parameters <json> [选项]   # 一二阶段串跑
 
 详细参数见 README.md 或 `python run.py stage1 -h`。
 """

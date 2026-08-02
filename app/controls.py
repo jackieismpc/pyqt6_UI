@@ -89,10 +89,10 @@ class ControlBar(QWidget):
         layout.addWidget(self.frame_label)
         layout.addWidget(self.frame_spin)
 
-        # 保存结果开关（默认不保存；勾选后本次产物写入 assets/<日期-时间>/）
+        # 保存结果开关（默认不保存；勾选后本次产物写入 data/results/<日期-时间>/）
         self.save_check = QCheckBox("保存结果")
         self.save_check.setChecked(False)
-        self.save_check.setToolTip("勾选后，本次推理产物保存到 assets/<日期-时间>/ 留档；默认不保存")
+        self.save_check.setToolTip("勾选后，本次推理产物保存到 data/results/<日期-时间>/ 留档；默认不保存")
         layout.addWidget(self.save_check)
 
         # 主运行按钮
@@ -186,7 +186,7 @@ class ControlBar(QWidget):
         return int(self.shots_spin.value())
 
     def save_results(self) -> bool:
-        """是否保存本次推理结果到 assets/<日期-时间>/。"""
+        """是否保存本次推理结果到 data/results/<日期-时间>/。"""
         return self.save_check.isChecked()
 
     # ---- 状态设置 ----

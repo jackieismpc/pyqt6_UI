@@ -189,7 +189,7 @@ class Stage2Config:
     """第二阶段（公制域）总配置。"""
 
     stage1_geometry_json: str        # 第一阶段产物 standard_geometry_pixel.json
-    camera_calibration: str          # 相机内参 JSON（当前已有）
+    camera_parameters: Optional[str] = None  # 显式相机参数 JSON；省略时由后端解析优先级
     output_dir: str = "outputs/stage2"
     mode: str = "auto"               # auto | scale_anchor | extrinsic_multiview
 

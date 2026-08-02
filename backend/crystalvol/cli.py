@@ -164,7 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_stage2 = sub.add_parser("stage2", help="只运行第二阶段（公制体积恢复）。")
     p_stage2.add_argument("--stage1-geometry", required=True,
                           help="第一阶段产物 geometry/standard_geometry_pixel.json。")
-    p_stage2.add_argument("--camera-calibration", required=True, help="相机内参 JSON。")
+    p_stage2.add_argument("--camera-parameters", default=None, help="统一相机参数 JSON；省略时使用 params/ 或后端默认参数。")
     p_stage2.add_argument("--output-dir", default="outputs/stage2", help="输出目录。默认 outputs/stage2。")
     p_stage2.add_argument("--mode", choices=["auto", "scale_anchor", "extrinsic_multiview"], default="auto",
                           help="公制恢复模式。默认 auto。")
@@ -177,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- full ----
     p_full = sub.add_parser("full", help="依次运行第一阶段 + 第二阶段。")
     add_stage1_body(p_full)
-    p_full.add_argument("--camera-calibration", required=True, help="相机内参 JSON（第二阶段用）。")
+    p_full.add_argument("--camera-parameters", default=None, help="统一相机参数 JSON；省略时使用 params/ 或后端默认参数。")
     p_full.add_argument("--stage2-output-dir", default="outputs/stage2", help="第二阶段输出目录。")
     p_full.add_argument("--mode", choices=["auto", "scale_anchor", "extrinsic_multiview"], default="auto",
                         help="公制恢复模式。默认 auto。")
@@ -201,7 +201,7 @@ def main(argv=None) -> int:
     if args.command == "stage2":
         cfg = Stage2Config(
             stage1_geometry_json=args.stage1_geometry,
-            camera_calibration=args.camera_calibration,
+            camera_parameters=args.camera_parameters,
             output_dir=args.output_dir,
             mode=args.mode,
             metric_anchor=_metric_from_args(args),
@@ -222,7 +222,7 @@ def main(argv=None) -> int:
         geometry_json = str(Path(summary["output_dir"]) / "geometry" / "standard_geometry_pixel.json")
         cfg = Stage2Config(
             stage1_geometry_json=geometry_json,
-            camera_calibration=args.camera_calibration,
+            camera_parameters=args.camera_parameters,
             output_dir=args.stage2_output_dir,
             mode=args.mode,
             metric_anchor=_metric_from_args(args),

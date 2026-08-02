@@ -83,7 +83,7 @@ def run_stage2(cfg: Stage2Config) -> Dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # 加载内参（当前一定有；用于校验与记录，未来 extrinsic 模式会用到）
-    calibration = load_camera_calibration(cfg.camera_calibration)
+    calibration = load_camera_calibration(cfg.camera_parameters)
     log(f"已加载相机内参: {calibration.source_path}")
 
     geometry_px = _load_stage1_geometry(cfg.stage1_geometry_json)

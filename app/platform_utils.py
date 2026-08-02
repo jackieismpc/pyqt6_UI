@@ -190,28 +190,3 @@ def ensure_mvs_importable() -> bool:
     except (ImportError, OSError) as exc:
         logger.debug("MVS SDK 导入失败: %s", exc)
         return False
-
-
-# ---- 通用：项目资源默认路径 ----
-
-def default_camera_params_path() -> Path:
-    """跨平台的 camera_params.txt 默认查找路径。
-
-    优先级：
-    1. 环境变量 CRYSTAL_CAMERA_PARAMS
-    2. 当前工作目录下的 camera_params.txt
-    3. 未找到时返回当前工作目录下的 camera_params.txt（触发 FileNotFoundError）
-
-    用户使用时只需将 camera_params.txt 放在项目根目录（与 main.py 同级）。
-    """
-    env_path = os.environ.get("CRYSTAL_CAMERA_PARAMS")
-    if env_path:
-        return Path(env_path).expanduser()
-
-    # 相对路径：优先当前工作目录
-    p = Path("camera_params.txt")
-    if p.is_file():
-        return p
-
-    # 未找到时仍返回当前目录，由调用方处理 FileNotFoundError
-    return Path("camera_params.txt")

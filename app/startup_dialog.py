@@ -1,10 +1,7 @@
 """
 启动配置对话框。
 
-在主窗口加载前弹出，让用户选择：
-- 相机模式：单目 / 双目
-- 外参组（1-12 组标定图对应的相机位姿）
-- 可选的尺度锚点校正
+在主窗口加载前弹出，让用户选择运行模式、后端提供的外参组和尺度锚点。
 """
 
 from __future__ import annotations
@@ -23,19 +20,19 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .camera_config import CameraConfig, CameraParams, parse_camera_params
+from .camera_config import CameraConfig
 
 
 class StartupDialog(QDialog):
     """启动配置对话框（模态）。"""
 
-    def __init__(self, camera_params: CameraParams | None = None, parent=None):
+    def __init__(self, parameter_summary: dict | None = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("相机配置")
         self.setMinimumWidth(420)
         self.setStyleSheet("background-color: #f5f5f7;")
 
-        self._params = camera_params or parse_camera_params()
+        self._summary = parameter_summary or {"extrinsics": []}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 22, 28, 22)
@@ -75,12 +72,14 @@ class StartupDialog(QDialog):
 
         # 外参组选择
         self._ext_combo = QComboBox()
-        for i, ext in enumerate(self._params.extrinsics):
-            import math
-            d = math.sqrt(sum(v * v for v in ext.t))
+        for i, ext in enumerate(self._summary.get("extrinsics", [])):
+            d = float(ext.get("distance_m", 0.0)) * 1000.0
             self._ext_combo.addItem(
                 f"外参组 {i + 1}　·　距离 ≈ {d:.0f} mm", i
             )
+        if self._ext_combo.count() == 0:
+            self._ext_combo.addItem("未配置外参（仅像素域）", -1)
+            self._ext_combo.setEnabled(False)
         self._ext_combo.setCurrentIndex(0)
         form.addRow("外参（相机位姿）", self._ext_combo)
 
