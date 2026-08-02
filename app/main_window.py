@@ -216,26 +216,13 @@ class MainWindow(QMainWindow):
             return
 
         save = self.control_bar.save_results()
-        camera_mode = self.backend._camera_config.mode
 
         if input_type == "video":
             path, _ = QFileDialog.getOpenFileName(self, "选择一个视频文件", "", _VIDEO_FILTER)
             if not path:
                 return
             options = {"num_frames": self.control_bar.num_frames(), "save": save}
-        elif camera_mode == "binocular":
-            # 双目：依次选择左目、右目图片目录
-            path_left = QFileDialog.getExistingDirectory(
-                self, "选择左目相机图片目录（目录内所有图片视为同一晶体）")
-            if not path_left:
-                return
-            path_right = QFileDialog.getExistingDirectory(
-                self, "选择右目相机图片目录（目录内所有图片视为同一晶体）")
-            if not path_right:
-                return
-            path = path_left
-            options = {"save": save, "input_path2": path_right, "mode": "binocular"}
-        else:  # image, monocular
+        else:  # image directory
             path = QFileDialog.getExistingDirectory(
                 self, "选择一个图片目录（目录内所有图片视为同一晶体）")
             if not path:

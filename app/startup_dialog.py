@@ -59,10 +59,9 @@ class StartupDialog(QDialog):
         # 相机模式
         self._mode_combo = QComboBox()
         self._mode_combo.addItem("单目相机", "monocular")
-        self._mode_combo.addItem("双目相机（实验性）", "binocular")
         self._mode_combo.setCurrentIndex(0)
         self._mode_combo.setToolTip(
-            "单目：单相机拍摄；双目：双相机立体匹配增强深度估计（实验性）"
+            "单目：单相机拍摄；深度由多视角、外参或尺度锚点增强"
         )
         mode_widget = QWidget()
         mode_layout = QHBoxLayout(mode_widget)

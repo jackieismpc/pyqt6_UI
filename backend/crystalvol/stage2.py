@@ -11,7 +11,7 @@
   用参考板外参 + 多视角已知转角做联合几何拟合，直接解出真实尺寸。
   需要：转台/参考板配置(turntable_config) + 每帧角度(angles_file) + 每帧可见参考板。
   当前项目只标定了内参、尚无外参，故本模式仅搭好接口与输入校验；
-  待用 tools/calibrate_turntable.py 标定外参后，再接入 crystalvol.reference_target
+  待补充转台/参考板的多视角联合优化后，再接入 crystalvol.reference_target
   与多视角优化后端启用（接入点见 _run_extrinsic_multiview）。
 """
 
@@ -21,7 +21,7 @@ import json
 from pathlib import Path
 from typing import Dict
 
-from .calibration import load_camera_calibration
+from .calibration import apply_growth_constraints, load_camera_calibration
 from .config import Stage2Config
 from .logging_utils import log, section, warn
 from .metric import convert_pixel_to_metric
@@ -66,13 +66,13 @@ def _run_extrinsic_multiview(cfg: Stage2Config, geometry_px: Dict[str, float]) -
     """
     missing = []
     if not cfg.turntable_config:
-        missing.append("turntable_config（转台/参考板配置，用 tools/calibrate_turntable.py 生成）")
+        missing.append("turntable_config（转台/参考板配置）")
     if not cfg.angles_file:
         missing.append("angles_file（每帧转台角度）")
     raise NotImplementedError(
         "第二阶段 extrinsic_multiview 模式需要相机外参（参考板位姿），当前项目尚未标定外参，"
         "该模式暂未启用。缺少：" + ("；".join(missing) if missing else "参考板外参标定") +
-        "。请先用 tools/calibrate_turntable.py 标定，或改用 scale_anchor 模式（提供一条真实边长）。"
+        "。请先准备转台/参考板输入，或改用 scale_anchor 模式（提供一条真实边长）。"
     )
 
 
@@ -109,6 +109,8 @@ def run_stage2(cfg: Stage2Config) -> Dict[str, object]:
         result = _run_extrinsic_multiview(cfg, geometry_px)
     else:
         raise ValueError(f"未知第二阶段模式: {mode}")
+
+    result = apply_growth_constraints(result)
 
     # 体积范围报警
     volume_m3 = float(result.get("volume_m3", 0.0))

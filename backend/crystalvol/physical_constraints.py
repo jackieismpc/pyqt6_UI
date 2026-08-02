@@ -17,6 +17,34 @@ MIN_CRYSTAL_LENGTH_CM = 1.0
 MAX_CRYSTAL_LENGTH_CM = 70.0
 MAX_REALTIME_SHRINK_RATIO = 0.25
 
+_UNIT_TO_CM = {"mm": 0.1, "cm": 1.0, "m": 100.0}
+
+
+def _dimensions_in_cm(metric: dict[str, object]) -> dict[str, float] | None:
+    dimensions = metric.get("dimensions_cm")
+    if isinstance(dimensions, dict):
+        try:
+            return {key: float(value) for key, value in dimensions.items()}
+        except (TypeError, ValueError):
+            return None
+
+    # scale-anchor 的 CLI 结果按用户单位命名；这里转成 cm，保证 CLI 和 UI
+    # 使用同一套物理约束。
+    dimensions = metric.get("geometry_params_unit")
+    unit = str(metric.get("units", "cm")).lower()
+    factor = _UNIT_TO_CM.get(unit)
+    if not isinstance(dimensions, dict) or factor is None:
+        return None
+    try:
+        normalized = {}
+        for key in ("length", "width", "body_height", "pyramid_height", "total_height"):
+            raw_key = key if key in dimensions else f"{key}_{unit}"
+            if raw_key in dimensions:
+                normalized[key] = float(dimensions[raw_key]) * factor
+        return normalized
+    except (TypeError, ValueError):
+        return None
+
 
 def apply_growth_constraints(
     metric: dict[str, object],
@@ -32,8 +60,8 @@ def apply_growth_constraints(
     原因和建议。这样前端可以继续展示问题帧，工程流程也不会因为一个坏帧
     崩溃；调用方应只把 ``accepted_for_growth`` 为真的结果写入历史基准。
     """
-    dimensions = metric.get("dimensions_cm")
-    if not isinstance(dimensions, dict):
+    dimensions = _dimensions_in_cm(metric)
+    if dimensions is None:
         return {**metric, "physical_constraints": {
             "valid": False,
             "accepted_for_growth": False,
@@ -75,4 +103,3 @@ def apply_growth_constraints(
         "warnings": warnings,
     }
     return {**metric, "physical_constraints": constraints}
-

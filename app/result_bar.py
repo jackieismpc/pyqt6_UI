@@ -174,10 +174,14 @@ class ResultBar(QWidget):
         if isinstance(res.metric, dict) and res.metric.get("scale_info"):
             si = res.metric["scale_info"]
             method = si.get("method", "?")
-            dist = si.get("distance_mm", 0)
+            dist = float(si.get("distance_m", 0.0)) * 1000.0
             metric_info = f"\n换算方式：{method} · 距离 {dist:.0f}mm"
             if si.get("corrected_by"):
                 metric_info += f"（已用尺度锚点校正 ×{si.get('correction_factor',1):.2f}）"
+        if isinstance(res.metric, dict):
+            constraints = res.metric.get("physical_constraints", {})
+            if isinstance(constraints, dict) and constraints.get("warnings"):
+                metric_info += "\n物理约束：" + "；".join(constraints["warnings"])
         tip = (
             f"{px_vol}{metric_info}\n"
             f"当前帧 {fr.name} 单帧体积：{fr.volume_px3:,.0f} px³（仅诊断）\n"

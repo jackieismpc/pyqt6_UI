@@ -150,8 +150,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="判定 fit_ready 的最小关键边可见比例。默认 0.5。")
         p.add_argument("--min-coverage-ratio", type=float, default=0.06,
                        help="剪影相对 ROI 的最小面积占比。默认 0.06。")
-        p.add_argument("--core-percentile", type=float, default=55.0,
-                       help="亮核收紧：前景内亮度分位，越大越紧（把晶体从背光光晕里分离）。默认 55。")
+        p.add_argument("--core-percentile", type=float, default=40.0,
+                       help="亮核收紧：前景内亮度分位，越大越紧（把晶体从背光光晕里分离）。默认 40。")
         _add_preprocess_args(p)
         _add_localize_args(p)
         _add_edge_args(p)
