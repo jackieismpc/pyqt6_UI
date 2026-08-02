@@ -40,6 +40,8 @@ SUPPORTED_TARGET_TYPES = {
     "apriltag",
 }
 
+DEFAULT_CHARUCO_DICTIONARY = "DICT_5X5_100"
+
 
 @dataclass
 class ReferenceTargetConfig:
@@ -487,7 +489,7 @@ def _detect_aruco_board_pose(
 def _build_charuco_board(config: ReferenceTargetConfig):
     if config.pattern_size is None or config.square_size_m is None or config.marker_length_m is None:
         raise ValueError("ChArUco 需要提供 pattern_size、square_size 与 marker_length。")
-    dictionary = _resolve_aruco_dictionary(config.dictionary_name or "DICT_4X4_50")
+    dictionary = _resolve_aruco_dictionary(config.dictionary_name or DEFAULT_CHARUCO_DICTIONARY)
     squares_x, squares_y = config.pattern_size
     return cv2.aruco.CharucoBoard(
         (int(squares_x), int(squares_y)),
@@ -504,7 +506,7 @@ def _detect_charuco_pose(
     config: ReferenceTargetConfig,
 ) -> Optional[ReferencePoseResult]:
     board = _build_charuco_board(config)
-    dictionary = _resolve_aruco_dictionary(config.dictionary_name or "DICT_4X4_50")
+    dictionary = _resolve_aruco_dictionary(config.dictionary_name or DEFAULT_CHARUCO_DICTIONARY)
     detector = cv2.aruco.ArucoDetector(dictionary, cv2.aruco.DetectorParameters())
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     corners, ids, _ = detector.detectMarkers(gray)
