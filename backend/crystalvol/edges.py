@@ -11,7 +11,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from collections import OrderedDict
+from typing import List, Optional
 
 import cv2
 import numpy as np
@@ -20,7 +21,8 @@ from .config import EdgeConfig
 from .logging_utils import warn
 
 # 深度检测器缓存：避免重复加载权重
-_DEEP_CACHE: Dict[str, "DeepEdgeDetector"] = {}
+_DEEP_CACHE: "OrderedDict[str, DeepEdgeDetector]" = OrderedDict()
+_MAX_DEEP_CACHE = 4
 
 
 def _resolve_deep_device(prefer: str) -> str:
@@ -116,14 +118,40 @@ class DeepEdgeDetector:
             arr = cv2.resize(arr, (width, height), interpolation=cv2.INTER_LINEAR)
         return arr.astype(np.float32) / 255.0
 
+    def close(self) -> None:
+        """释放深度边缘模型引用。"""
+        self._model = None
+
 
 def get_deep_detector(cfg: EdgeConfig, backend: str) -> DeepEdgeDetector:
     """按 (backend, repo, device) 取/建缓存的深度检测器。"""
     device = _resolve_deep_device(cfg.device)
     key = f"{backend}|{cfg.deep_repo}|{device}"
-    if key not in _DEEP_CACHE:
-        _DEEP_CACHE[key] = DeepEdgeDetector(backend, cfg.deep_repo, device)
-    return _DEEP_CACHE[key]
+    detector = _DEEP_CACHE.get(key)
+    if detector is None:
+        if len(_DEEP_CACHE) >= _MAX_DEEP_CACHE:
+            _, old_detector = _DEEP_CACHE.popitem(last=False)
+            old_detector.close()
+        detector = DeepEdgeDetector(backend, cfg.deep_repo, device)
+        _DEEP_CACHE[key] = detector
+    else:
+        _DEEP_CACHE.move_to_end(key)
+    return detector
+
+
+def clear_deep_detector_cache() -> None:
+    """释放所有深度边缘模型，供应用退出或设备切换时调用。"""
+    while _DEEP_CACHE:
+        _, detector = _DEEP_CACHE.popitem(last=False)
+        detector.close()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        if hasattr(torch, "mps") and torch.mps.is_available():
+            torch.mps.empty_cache()
+    except Exception:
+        pass
 
 
 def canny_edge_map(image_bgr: np.ndarray, cfg: EdgeConfig) -> np.ndarray:

@@ -66,11 +66,11 @@ def _video_capture(path: str) -> cv2.VideoCapture:
     if platform.system() == "Windows":
         try:
             import ctypes
-            buf = ctypes.create_unicode_buffer(260)
+            buf = ctypes.create_unicode_buffer(32768)
             ret = ctypes.windll.kernel32.GetShortPathNameW(
-                os.path.abspath(path), buf, 260,
+                os.path.abspath(path), buf, len(buf),
             )
-            if ret > 0 and ret < 260:
+            if ret > 0 and ret < len(buf):
                 short = buf.value
                 cap2 = cv2.VideoCapture(short)
                 if cap2.isOpened():

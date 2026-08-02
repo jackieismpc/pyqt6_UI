@@ -114,7 +114,8 @@ def _process_frame(frame: InputFrame, cfg: Stage1Config, segmenter: Optional[Cry
         )
         if best is None or _score_candidate(wf) > _score_candidate(best.wireframe):
             best = candidate
-    assert best is not None
+    if best is None:
+        raise RuntimeError(f"[{frame.name}] 没有可用的边缘处理后端")
     log(f"[{frame.name}] roi={roi.scale}({roi.area_ratio*100:.2f}%) sam2={sam2_used} "
         f"backend={best.edge_backend} fit_ready={best.wireframe.fit_ready} "
         f"visible={best.wireframe.visible_ratio:.2f} coverage={best.wireframe.coverage_ratio:.3f} "

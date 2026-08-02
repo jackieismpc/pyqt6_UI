@@ -274,3 +274,9 @@ class BackendInterface:
         """应用退出时释放实时会话和未保存的临时产物。"""
         self.end_realtime_session()
         self._cleanup_temporary_outputs()
+        try:
+            _ensure_backend_importable()
+            from crystalvol.edges import clear_deep_detector_cache  # noqa: WPS433
+            clear_deep_detector_cache()
+        except Exception:
+            logger.debug("深度边缘缓存清理失败", exc_info=True)
