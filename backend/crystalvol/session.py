@@ -73,8 +73,10 @@ class Stage1Session:
                            source_path=f"realtime://{frame_name}", index=index)
 
         out = _process_frame(frame, self.cfg, self.segmenter)
-        self.frame_outputs.append(out)
         write_frame_products(self.layout, out)
+        from .stage1 import _release_frame_buffers
+        _release_frame_buffers(out)
+        self.frame_outputs.append(out)
 
         summary = finalize_stage1(self.cfg, self.layout, self.frame_outputs)
         log(f"实时增量：已并入第 {self.count} 张，联合体积 "

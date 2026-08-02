@@ -6,15 +6,57 @@
     ImagePanel: 带标题栏的图像面板卡片，标题栏右侧可插入自定义控件（如下拉框）。
 """
 
-import os
-
 import numpy as np
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QImage, QImageReader, QPixmap
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget
 
 from .video_player import VideoPlayer
+
+
+MAX_STATIC_PREVIEW_SIDE = 1280
+
+
+def _scaled_pixmap_from_path(path: str, max_side: int = MAX_STATIC_PREVIEW_SIDE) -> QPixmap:
+    """读取图片时直接限制解码尺寸，避免把超大原图解码成完整 QPixmap。
+
+    先让 Qt 通过 Unicode 路径读取；某些旧平台插件若不支持该路径，再回退到
+    Python 二进制 + QImageReader。两条路径都设置 scaled size，前端只保留预览图。
+    """
+    if not path:
+        return QPixmap()
+
+    def read(reader: QImageReader) -> QPixmap:
+        reader.setAutoTransform(True)
+        original = reader.size()
+        if original.isValid() and max(original.width(), original.height()) > max_side:
+            scale = float(max_side) / max(original.width(), original.height())
+            reader.setScaledSize(QSize(
+                max(1, round(original.width() * scale)),
+                max(1, round(original.height() * scale)),
+            ))
+        image = reader.read()
+        return QPixmap.fromImage(image) if not image.isNull() else QPixmap()
+
+    pixmap = read(QImageReader(path))
+    if not pixmap.isNull():
+        return pixmap
+
+    # 兼容 Windows 上少数 Qt 图像插件的路径编码问题；这里只保留压缩字节，
+    # 不再用 QPixmap.loadFromData 解码完整原图。
+    try:
+        from PyQt6.QtCore import QBuffer, QByteArray, QIODevice
+
+        with open(path, "rb") as handle:
+            buffer = QBuffer()
+            buffer.setData(QByteArray(handle.read()))
+            buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+            pixmap = read(QImageReader(buffer))
+            buffer.close()
+            return pixmap
+    except (OSError, ValueError):
+        return QPixmap()
 
 
 class ScaledImageLabel(QLabel):
@@ -79,17 +121,11 @@ class ScaledImageLabel(QLabel):
         使用 Python open() 读 bytes 再构造 QPixmap，避免 Qt 内部路径编码问题
         （尤其是 Windows 上非 ASCII 路径）。
         """
-        if not path or not os.path.exists(path):
+        if not path:
             self._show_placeholder()
             return
 
-        # 跨平台安全加载：Python 读 bytes → QPixmap.loadFromData
-        pixmap = QPixmap()
-        try:
-            with open(path, "rb") as fh:
-                pixmap.loadFromData(fh.read())
-        except (OSError, ValueError):
-            pixmap = QPixmap()  # 确保 isNull() = True
+        pixmap = _scaled_pixmap_from_path(path)
         if pixmap.isNull():
             self._show_placeholder()
             return
@@ -162,6 +198,7 @@ class ImagePanel(QWidget):
 
     def set_image(self, path):
         """转发给内部 ScaledImageLabel，切换到静态图模式。"""
+        self._video_player.stop()
         self._display_stack.setCurrentWidget(self.image_label)
         self.image_label.set_image(path)
 
@@ -172,10 +209,16 @@ class ImagePanel(QWidget):
 
     def set_message(self, text: str):
         """在图像区显示状态文字（等待 / 推理中等）。"""
+        self._video_player.stop()
         self._display_stack.setCurrentWidget(self.image_label)
         self.image_label.set_message(text)
 
     def set_np_bgr(self, array):
         """在图像区显示一张 BGR numpy 图（摄像头实时预览），切换到静态模式。"""
+        self._video_player.stop()
         self._display_stack.setCurrentWidget(self.image_label)
         self.image_label.set_np_bgr(array)
+
+    def stop(self) -> None:
+        """停止视频定时器并释放视频句柄。"""
+        self._video_player.stop()

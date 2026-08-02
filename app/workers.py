@@ -82,6 +82,10 @@ class RealtimeWorker(QThread):
         self._latest_frame = None
         self._sdk_cam = None
 
+    def _is_running(self) -> bool:
+        with self._state_lock:
+            return self._running
+
     # ---- 主线程调用 ----
     def request_capture(self) -> None:
         with self._state_lock:
@@ -114,7 +118,7 @@ class RealtimeWorker(QThread):
 
             last_preview = 0.0
             preview_interval = 1.0 / 15.0
-            while self._running:
+            while self._is_running():
                 if sdk_reader:
                     ok, frame = sdk_reader()
                 else:
@@ -166,6 +170,7 @@ class RealtimeWorker(QThread):
                     self._backend.end_realtime_session()
                 except Exception as exc:  # noqa: BLE001
                     self.error.emit(f"实时会话清理失败：{exc}")
+            self._latest_frame = None
             self.stopped.emit()
 
     # ---- 摄像头打开逻辑 ----

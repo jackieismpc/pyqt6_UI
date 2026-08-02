@@ -25,7 +25,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import Iterator, List
 
 import cv2
 import numpy as np
@@ -93,7 +93,7 @@ class InputFrame:
     """单个输入帧。"""
 
     name: str            # 规范化名字（如 frame_01 / 原图 stem）
-    image_bgr: np.ndarray
+    image_bgr: np.ndarray | None
     source_path: str
     index: int
 
@@ -113,51 +113,111 @@ def _resize_max_side(image: np.ndarray, max_side: int) -> np.ndarray:
     )
 
 
-def _load_video_frames(path: Path, num_frames: int, start_ratio: float, end_ratio: float) -> List[InputFrame]:
+def _iter_video_frames(
+    path: Path,
+    num_frames: int,
+    start_ratio: float,
+    end_ratio: float,
+    max_input_side: int,
+) -> Iterator[InputFrame]:
     capture = _video_capture(str(path))
     if not capture.isOpened():
         raise RuntimeError(f"无法打开视频: {path}")
-    total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-    if total <= 0:
-        # 部分容器拿不到总帧数，退化为顺序读取
-        frames = []
-        index = 0
-        while len(frames) < num_frames:
-            ok, frame = capture.read()
-            if not ok:
-                break
-            frames.append(InputFrame(f"frame_{index + 1:02d}", frame, str(path), index))
-            index += 1
+    emitted = 0
+    try:
+        total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total <= 0:
+            # 部分容器拿不到总帧数，退化为顺序读取；每次只保留一帧。
+            index = 0
+            while emitted < max(num_frames, 1):
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                emitted += 1
+                yield InputFrame(
+                    f"frame_{emitted:02d}",
+                    _resize_max_side(frame, max_input_side),
+                    str(path),
+                    index,
+                )
+                index += 1
+        else:
+            start = int(total * float(np.clip(start_ratio, 0.0, 1.0)))
+            end = int(total * float(np.clip(end_ratio, 0.0, 1.0)))
+            end = max(end, start + 1)
+            positions = np.linspace(
+                start, min(end, total) - 1, num=max(num_frames, 1)
+            ).astype(int)
+            # 短视频可能生成重复位置，跳过重复读取以减少无效推理。
+            unique_positions = list(dict.fromkeys(int(pos) for pos in positions))
+            for pos in unique_positions:
+                capture.set(cv2.CAP_PROP_POS_FRAMES, pos)
+                ok, frame = capture.read()
+                if not ok:
+                    continue
+                emitted += 1
+                yield InputFrame(
+                    f"frame_{emitted:02d}",
+                    _resize_max_side(frame, max_input_side),
+                    str(path),
+                    pos,
+                )
+    finally:
         capture.release()
-        if not frames:
-            raise RuntimeError(f"视频没有可读帧: {path}")
-        return frames
 
-    start = int(total * float(np.clip(start_ratio, 0.0, 1.0)))
-    end = int(total * float(np.clip(end_ratio, 0.0, 1.0)))
-    end = max(end, start + 1)
-    positions = np.linspace(start, min(end, total) - 1, num=max(num_frames, 1)).astype(int)
-    frames = []
-    for order, pos in enumerate(positions):
-        capture.set(cv2.CAP_PROP_POS_FRAMES, int(pos))
-        ok, frame = capture.read()
-        if not ok:
-            continue
-        frames.append(InputFrame(f"frame_{order + 1:02d}", frame, str(path), int(pos)))
-    capture.release()
-    if not frames:
-        raise RuntimeError(f"视频抽帧失败: {path}")
-    return frames
+    if emitted == 0:
+        raise RuntimeError(f"视频没有可读帧或抽帧失败: {path}")
 
 
-def _load_image_frames(paths: List[Path]) -> List[InputFrame]:
-    frames = []
+def _safe_frame_name(stem: str, used: dict[str, int]) -> str:
+    """将文件名 stem 变成稳定的输出名，并处理同名图片覆盖问题。"""
+    safe = "".join(char if (char.isalnum() or char in "._-") else "_" for char in stem)
+    safe = safe.strip(" .") or "frame"
+    used[safe] = used.get(safe, 0) + 1
+    return safe if used[safe] == 1 else f"{safe}_{used[safe]:02d}"
+
+
+def _iter_image_frames(paths: Iterator[Path], max_input_side: int) -> Iterator[InputFrame]:
+    used: dict[str, int] = {}
     for order, item in enumerate(paths):
         image = _imread(str(item))
         if image is None:
             raise RuntimeError(f"无法读取图像: {item}")
-        frames.append(InputFrame(item.stem, image, str(item), order))
-    return frames
+        yield InputFrame(
+            _safe_frame_name(item.stem, used),
+            _resize_max_side(image, max_input_side),
+            str(item),
+            order,
+        )
+
+
+def iter_inputs(
+    input_path: str,
+    num_frames: int = 7,
+    frame_start_ratio: float = 0.0,
+    frame_end_ratio: float = 1.0,
+    max_input_side: int = 2304,
+) -> Iterator[InputFrame]:
+    """流式解析输入，避免图片目录一次性把所有大图放入内存。"""
+    path = Path(input_path).expanduser()
+    if not path.exists():
+        raise RuntimeError(f"输入路径不存在: {path}")
+
+    if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS:
+        yield from _iter_video_frames(
+            path, num_frames, frame_start_ratio, frame_end_ratio, max_input_side
+        )
+    elif path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+        yield from _iter_image_frames(iter((path,)), max_input_side)
+    elif path.is_dir():
+        image_paths = sorted(
+            p for p in path.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
+        )
+        if not image_paths:
+            raise RuntimeError(f"目录中没有图像文件: {path}")
+        yield from _iter_image_frames(iter(image_paths), max_input_side)
+    else:
+        raise RuntimeError(f"不支持的输入类型: {path}")
 
 
 def load_inputs(
@@ -167,29 +227,10 @@ def load_inputs(
     frame_end_ratio: float = 1.0,
     max_input_side: int = 2304,
 ) -> List[InputFrame]:
-    """把输入路径统一解析成一组 InputFrame。"""
-    path = Path(input_path).expanduser()
-    if not path.exists():
-        raise RuntimeError(f"输入路径不存在: {path}")
-
-    if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS:
-        frames = _load_video_frames(path, num_frames, frame_start_ratio, frame_end_ratio)
-    elif path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
-        frames = _load_image_frames([path])
-    elif path.is_dir():
-        image_paths = sorted(
-            p for p in path.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
-        )
-        if not image_paths:
-            raise RuntimeError(f"目录中没有图像文件: {path}")
-        frames = _load_image_frames(image_paths)
-    else:
-        raise RuntimeError(f"不支持的输入类型: {path}")
-
-    # 统一缩放，控制大图前端耗时
-    for frame in frames:
-        frame.image_bgr = _resize_max_side(frame.image_bgr, max_input_side)
-    return frames
+    """把输入路径解析成一组 InputFrame（兼容调用方的列表接口）。"""
+    return list(iter_inputs(
+        input_path, num_frames, frame_start_ratio, frame_end_ratio, max_input_side
+    ))
 
 
 @dataclass

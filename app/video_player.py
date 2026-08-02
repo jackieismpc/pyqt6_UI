@@ -7,8 +7,6 @@
 
 from __future__ import annotations
 
-import time
-
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
@@ -38,7 +36,8 @@ class VideoPlayer(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._next_frame)
         self._fps = 25.0
-        self._last_frame_time = 0.0
+        self._max_preview_side = 1280
+        self._max_display_fps = 15.0
 
         self._label = QLabel(self)
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -67,9 +66,9 @@ class VideoPlayer(QWidget):
         fps = cap.get(cv2.CAP_PROP_FPS)
         self._fps = max(fps, 1.0) if fps > 0 else 25.0
         # 动态帧间隔：按实际帧率设置 timer，而非固定间隔
-        interval = int(1000.0 / self._fps)
-        interval = max(int(1000.0 / self._fps), 16)  # 不低于 ~60fps，避免太高占满 CPU
-        self._last_frame_time = time.monotonic()
+        # 原始视频可能是 4K/8K；展示只需预览，限制刷新率避免无意义的解码和 Qt
+        # 图像分配长期占满 CPU。算法处理仍使用后端独立读取的输入帧。
+        interval = max(int(1000.0 / self._fps), int(1000.0 / self._max_display_fps))
         self._timer.start(interval)
         self._next_frame()
 
@@ -140,7 +139,17 @@ class VideoPlayer(QWidget):
                 self._label.setText("（视频读帧失败）")
                 return
 
-        # BGR 零拷贝 → QImage（Format_BGR888）
+        max_side = max(frame.shape[:2])
+        if max_side > self._max_preview_side:
+            scale = self._max_preview_side / float(max_side)
+            frame = cv2.resize(
+                frame,
+                (max(1, round(frame.shape[1] * scale)), max(1, round(frame.shape[0] * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        # BGR 零拷贝 → QImage（Format_BGR888）；QPixmap.fromImage 会接管一份
+        # 预览尺寸的图像，不会长期持有视频解码的完整帧。
         if not frame.flags["C_CONTIGUOUS"]:
             frame = frame.copy()
         h, w = frame.shape[:2]
@@ -154,6 +163,10 @@ class VideoPlayer(QWidget):
                 Qt.TransformationMode.SmoothTransformation,
             )
             self._label.setPixmap(scaled)
+
+    def closeEvent(self, event) -> None:
+        self.stop()
+        super().closeEvent(event)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

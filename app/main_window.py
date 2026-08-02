@@ -235,6 +235,8 @@ class MainWindow(QMainWindow):
         self._run_worker = RunWorker(self.backend, path, input_type, options)
         self._run_worker.resultReady.connect(self._on_run_finished)
         self._run_worker.failed.connect(self._on_run_failed)
+        self._run_worker.finished.connect(self._run_worker.deleteLater)
+        self._run_worker.finished.connect(self._on_run_worker_finished)
         self._run_worker.start()
 
     def _begin_busy_state(self, input_type: str):
@@ -258,6 +260,11 @@ class MainWindow(QMainWindow):
         self.control_bar.set_status("推理失败")
         self._show_blank_panels()
         QMessageBox.critical(self, "推理失败", f"后端运行出错：\n{message}")
+
+    def _on_run_worker_finished(self):
+        """清除已结束线程引用，避免重复运行时累积 QThread 对象。"""
+        if self._run_worker is not None and not self._run_worker.isRunning():
+            self._run_worker = None
 
     # ==================================================================
     # 实时：摄像头多视角增量估计
@@ -302,6 +309,7 @@ class MainWindow(QMainWindow):
         self._rt_worker.shotProcessed.connect(self._on_shot_processed)
         self._rt_worker.error.connect(self._on_rt_error)
         self._rt_worker.stopped.connect(self._on_rt_stopped)
+        self._rt_worker.finished.connect(self._rt_worker.deleteLater)
         self._rt_worker.start()
 
     def _on_preview_frame(self, frame, _timestamp: float = 0.0):
@@ -388,6 +396,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """关闭窗口时确保摄像头线程退出。"""
+        self.panel_raw.stop()
+        self.panel_preprocess.stop()
+        self.panel_geometry.stop()
         if self._run_worker is not None and self._run_worker.isRunning():
             self._run_worker.cancel()
             if not self._run_worker.wait(5000):

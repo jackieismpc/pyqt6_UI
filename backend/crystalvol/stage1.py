@@ -25,7 +25,7 @@ import numpy as np
 from .config import Stage1Config
 from .edges import canny_edge_map, compute_edge_map
 from .geometry import build_vertices, edge_index_pairs
-from .io import InputFrame, OutputLayout, _imwrite, load_inputs
+from .io import InputFrame, OutputLayout, _imwrite, iter_inputs
 from .localize import RoiResult, locate_crystal
 from .logging_utils import log, section, warn
 from .metric import convert_pixel_to_metric
@@ -41,12 +41,12 @@ class FrameOutput:
     """单帧的全部中间结果（几何量以整幅像素为单位，与 ROI 平移无关）。"""
 
     frame: InputFrame
-    enhanced_bgr: np.ndarray          # 整幅增强图
+    enhanced_bgr: np.ndarray | None   # 整幅增强图
     roi: RoiResult                    # 定位得到的 ROI
-    roi_bgr: np.ndarray               # ROI 裁剪（增强）
-    edge_map: np.ndarray              # ROI 内融合边缘
-    mask: np.ndarray                  # ROI 内最大晶体剪影
-    silhouette_contour: np.ndarray    # ROI 坐标下的外轮廓
+    roi_bgr: np.ndarray | None        # ROI 裁剪（增强）
+    edge_map: np.ndarray | None       # ROI 内融合边缘
+    mask: np.ndarray | None            # ROI 内最大晶体剪影
+    silhouette_contour: np.ndarray | None  # ROI 坐标下的外轮廓
     wireframe: WireframeResult        # ROI 坐标下的线框（geometry_px 为像素长度）
     edge_backend: str
     sam2_used: bool
@@ -177,10 +177,10 @@ def _consolidate_geometry(pool: List[FrameOutput]) -> Dict[str, float]:
 def run_stage1(cfg: Stage1Config) -> Dict[str, object]:
     """第一阶段主入口。"""
     section("第一阶段：像素域轮廓与线框重建")
-    frames = load_inputs(
+    frames = iter_inputs(
         cfg.input_path, cfg.num_frames, cfg.frame_start_ratio, cfg.frame_end_ratio, cfg.max_input_side,
     )
-    log(f"读入 {len(frames)} 帧（输入: {cfg.input_path}）")
+    log(f"开始流式读取输入（输入: {cfg.input_path}）")
 
     layout = OutputLayout(Path(cfg.output_dir).expanduser().resolve()).prepare(clean=cfg.clean_output)
     log(f"输出目录: {layout.root}")
@@ -189,16 +189,19 @@ def run_stage1(cfg: Stage1Config) -> Dict[str, object]:
 
     frame_outputs: List[FrameOutput] = []
     failed_frames: list[dict[str, str]] = []
+    processed_count = 0
     for frame in frames:
         try:
             out = _process_frame(frame, cfg, segmenter)
+            write_frame_products(layout, out)
+            _release_frame_buffers(out)
         except Exception as exc:  # noqa: BLE001
             # 单帧异常不应让整批任务崩溃；保留错误并继续处理后续视图。
             failed_frames.append({"name": frame.name, "error": f"{type(exc).__name__}: {exc}"})
             warn(f"[{frame.name}] 单帧处理失败，跳过并继续：{exc}")
             continue
         frame_outputs.append(out)
-        write_frame_products(layout, out)
+        processed_count += 1
 
     if not frame_outputs:
         details = "；".join(f"{item['name']}: {item['error']}" for item in failed_frames)
@@ -209,12 +212,24 @@ def run_stage1(cfg: Stage1Config) -> Dict[str, object]:
     layout.result_json().write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    log(f"第一阶段完成：fit_ready {summary['fit_ready_count']}/{len(frame_outputs)} 帧")
+    log(f"第一阶段完成：fit_ready {summary['fit_ready_count']}/{processed_count} 帧")
     g = summary["geometry_px"]
     log(f"像素几何：length={g['length_px']:.1f}px width={g['width_px']:.1f}px "
         f"body_h={g['body_height_px']:.1f}px pyramid_h={g['pyramid_height_px']:.1f}px "
         f"volume_px3={g['volume_px3']:.3e}")
     return summary
+
+
+def _release_frame_buffers(out: FrameOutput) -> None:
+    """释放单帧推理的大数组，只保留共识和结果 JSON 所需元数据。"""
+    out.frame.image_bgr = None
+    out.enhanced_bgr = None
+    out.roi_bgr = None
+    out.edge_map = None
+    out.mask = None
+    out.silhouette_contour = None
+    # saliency 是整幅可视化图，已写入 debug 后不再需要常驻内存。
+    out.roi.saliency = np.empty((0, 0), dtype=np.uint8)
 
 
 def build_segmenter(cfg: Stage1Config) -> Optional[CrystalSegmenter]:
@@ -240,6 +255,8 @@ def write_frame_products(layout: OutputLayout, out: FrameOutput) -> None:
     x1, y1, x2, y2 = out.roi.bbox
     # 映射回整幅坐标用于 overlay
     wf_full = _shift_wireframe(out.wireframe, x1, y1)
+    if out.silhouette_contour is None:
+        raise RuntimeError(f"帧 {frame.name} 的轮廓缓冲已释放，不能重复写入产物")
     contour_full = (out.silhouette_contour + np.array([x1, y1], np.float32)
                     if out.silhouette_contour.size else out.silhouette_contour)
     overlay = render_overlay(out.enhanced_bgr, contour_full, wf_full)
