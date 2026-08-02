@@ -18,14 +18,37 @@ from .schema import load_parameters, save_parameters
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PARAMETERS = PROJECT_ROOT / "backend" / "crystalvol" / "defaults" / "camera_parameters.json"
 
+# 项目实际使用 ChArUco。棋盘格仍然可通过 --type chessboard 显式选择，
+# 但所有不写 --type 的命令必须生成同一套 ChArUco 参数，避免板型和检测器错配。
+DEFAULT_PATTERN_TYPE = "charuco"
+DEFAULT_PATTERN_SIZE = "5x7"       # 方格列数 x 行数
+DEFAULT_SQUARE_SIZE = 30.0          # mm
+DEFAULT_MARKER_LENGTH = 22.0        # mm，约为方格边长的 73%
+DEFAULT_DICTIONARY = "DICT_5X5_100"
+
 
 def _add_board_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--type", dest="pattern_type", choices=PATTERN_TYPES, default="chessboard", help="标定板类型。")
-    parser.add_argument("--pattern-size", default="9x6", help="列x行；棋盘格表示内角点，ChArUco 表示方格。默认 9x6。")
-    parser.add_argument("--square-size", type=float, default=30.0, help="棋盘格/ChArUco 方格边长。默认 30。")
+    parser.add_argument(
+        "--type", dest="pattern_type", choices=PATTERN_TYPES, default=DEFAULT_PATTERN_TYPE,
+        help="标定板类型。默认 charuco。",
+    )
+    parser.add_argument(
+        "--pattern-size", default=DEFAULT_PATTERN_SIZE,
+        help="列x行；棋盘格表示内角点，ChArUco 表示方格。默认 5x7。",
+    )
+    parser.add_argument(
+        "--square-size", type=float, default=DEFAULT_SQUARE_SIZE,
+        help="棋盘格/ChArUco 方格边长（默认 30 mm）。",
+    )
     parser.add_argument("--circle-distance", type=float, default=30.0, help="圆点板相邻圆心距离。默认 30。")
-    parser.add_argument("--marker-length", type=float, default=15.0, help="ChArUco marker 边长。默认 15。")
-    parser.add_argument("--dictionary", default="DICT_5X5_100", help="ChArUco 字典。默认 DICT_5X5_100。")
+    parser.add_argument(
+        "--marker-length", type=float, default=DEFAULT_MARKER_LENGTH,
+        help="ChArUco marker 边长（默认 22 mm）。",
+    )
+    parser.add_argument(
+        "--dictionary", default=DEFAULT_DICTIONARY,
+        help="ChArUco 字典。默认 DICT_5X5_100。",
+    )
     parser.add_argument("--unit", default="mm", choices=["mm", "cm", "m"], help="尺寸单位。默认 mm。")
 
 
@@ -52,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_board_args(board)
     board.add_argument("--dpi", type=int, default=300, help="输出打印分辨率。默认 300。")
     board.add_argument("--margin-mm", type=float, default=10.0, help="外边距。默认 10 mm。")
-    board.add_argument("--output", default="data/calibration/board.png", help="输出图片路径。")
+    board.add_argument("--output", default="data/calibration/charuco.png", help="输出图片路径。")
 
     intrinsics = sub.add_parser("intrinsics", help="从图片目录标定内参并输出统一 JSON。")
     intrinsics.add_argument("image_dir", help="标定图片目录。")
