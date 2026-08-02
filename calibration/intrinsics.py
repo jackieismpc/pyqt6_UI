@@ -73,6 +73,41 @@ def detect_views(
     return views, image_size, rejected
 
 
+def _swapped_charuco_spec(spec: BoardSpec) -> BoardSpec | None:
+    """返回交换列/行后的 ChArUco 规格，用于提示板型方向写反。"""
+    if spec.pattern_type != "charuco" or spec.pattern_size[0] == spec.pattern_size[1]:
+        return None
+    return BoardSpec(
+        pattern_type=spec.pattern_type,
+        pattern_size=(spec.pattern_size[1], spec.pattern_size[0]),
+        square_size=spec.square_size,
+        circle_distance=spec.circle_distance,
+        marker_length=spec.marker_length,
+        dictionary=spec.dictionary,
+        length_unit=spec.length_unit,
+    )
+
+
+def _detection_failure_message(
+    spec: BoardSpec,
+    paths: list[Path],
+    views: list[CalibrationView],
+    rejected: list[str],
+    min_views: int,
+) -> str:
+    columns, rows = spec.pattern_size
+    message = (
+        f"有效标定图只有 {len(views)}/{len(paths)} 张，至少需要 {min_views} 张；"
+        f"当前规格为 {spec.pattern_type} {columns}x{rows}"
+    )
+    if rejected:
+        sample = ", ".join(Path(path).name for path in rejected[:3])
+        message += f"，未检测到 {len(rejected)} 张（示例：{sample}）"
+    if spec.pattern_type == "charuco":
+        message += "。ChArUco 的 pattern-size 表示方格数，顺序是列x行"
+    return message
+
+
 def _calibration_flags(
     model: str,
     fix_aspect_ratio: bool,
@@ -166,7 +201,18 @@ def calibrate_intrinsics(
         paths, spec, include_debug=debug_dir is not None
     )
     if len(views) < min_views:
-        raise RuntimeError(f"有效标定图只有 {len(views)} 张，至少需要 {min_views} 张")
+        message = _detection_failure_message(spec, paths, views, detection_rejected, min_views)
+        swapped_spec = _swapped_charuco_spec(spec)
+        if swapped_spec is not None and not views:
+            swapped_views, _, _ = detect_views(paths, swapped_spec, include_debug=False)
+            if swapped_views:
+                swapped_columns, swapped_rows = swapped_spec.pattern_size
+                message += (
+                    f"；检测到 {len(swapped_views)} 张图片与交换后的规格 "
+                    f"{swapped_columns}x{swapped_rows} 匹配，请检查并显式使用 "
+                    f"--pattern-size {swapped_columns}x{swapped_rows}"
+                )
+        raise RuntimeError(message)
 
     if debug_dir:
         debug_root = Path(debug_dir).expanduser().resolve()

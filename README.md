@@ -67,12 +67,12 @@ uv run python main.py
 
 ### 1. 生成 ChArUco 标定板
 
-项目默认使用 ChArUco。默认规格为 5x7 个方格、30 mm 方格边长、22 mm marker、`DICT_5X5_100` 字典。ChArUco 的 `--pattern-size` 表示**方格数（列 x 行）**，不是内角点数：
+项目默认使用 ChArUco。默认规格为 7x5 个方格、30 mm 方格边长、22 mm marker、`DICT_5X5_100` 字典。ChArUco 的 `--pattern-size` 表示**方格数（列 x 行）**，不是内角点数；`7x5` 与 `5x7` 是两种不同的板型：
 
 ```bash
 uv run python -m calibration board \
   --type charuco \
-  --pattern-size 5x7 \
+  --pattern-size 7x5 \
   --square-size 30 \
   --marker-length 22 \
   --dictionary DICT_5X5_100 \
@@ -90,7 +90,7 @@ uv run python -m calibration board \
 ```bash
 uv run python -m calibration intrinsics data/calibration/intrinsics \
   --type charuco \
-  --pattern-size 5x7 \
+  --pattern-size 7x5 \
   --square-size 30 \
   --marker-length 22 \
   --dictionary DICT_5X5_100 \
@@ -101,6 +101,8 @@ uv run python -m calibration intrinsics data/calibration/intrinsics \
 
 程序使用 OpenCV `CharucoDetector`、`Board.matchImagePoints` 和 `calibrateCameraExtended`，默认按单视图重投影误差剔除明显异常图，输出内参、畸变、每张图的外参、重投影误差和接受/剔除列表。
 
+如果提示有效标定图为 0，先检查 ChArUco 的列行方向。当前项目照片使用 `7x5`；程序检测到全部失败时会自动尝试交换方向，并在错误信息中提示可复制的 `--pattern-size`。
+
 ### 3. 用单张图片求外参
 
 内参已经生成后，用一张能完整检测标定板的图片求该拍摄位置的外参：
@@ -110,7 +112,7 @@ uv run python -m calibration extrinsics \
   --image data/calibration/pose/center.png \
   --parameters params/camera_parameters.json \
   --type charuco \
-  --pattern-size 5x7 \
+  --pattern-size 7x5 \
   --square-size 30 \
   --marker-length 22 \
   --dictionary DICT_5X5_100 \

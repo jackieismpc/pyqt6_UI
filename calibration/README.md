@@ -32,7 +32,7 @@ uv run python -m calibration extrinsics -h
 ```bash
 uv run python -m calibration board \
   --type charuco \
-  --pattern-size 5x7 \
+  --pattern-size 7x5 \
   --square-size 30 \
   --marker-length 22 \
   --dictionary DICT_5X5_100 \
@@ -45,7 +45,7 @@ uv run python -m calibration board \
 参数：
 
 - `--type charuco`：ArUco marker 与棋盘格角点组合的标定板；
-- `--pattern-size 5x7`：**方格数**列数 x 行数；
+- `--pattern-size 7x5`：**方格数**列数 x 行数；`7x5` 与 `5x7` 不能互换，必须与实际打印板的横向/纵向方格数一致；
 - `--square-size 30`：一个方格的物理边长；
 - `--marker-length 22`：ArUco marker 边长，必须小于方格边长；
 - `--dictionary DICT_5X5_100`：marker 使用的 OpenCV 预定义字典；
@@ -92,7 +92,7 @@ uv run python -m calibration board --type asymmetric_circles_grid --pattern-size
 ```bash
 uv run python -m calibration intrinsics data/calibration/intrinsics \
   --type charuco \
-  --pattern-size 5x7 \
+  --pattern-size 7x5 \
   --square-size 30 \
   --marker-length 22 \
   --dictionary DICT_5X5_100 \
@@ -118,6 +118,10 @@ uv run python -m calibration intrinsics data/calibration/intrinsics \
 
 默认 ChArUco 流程使用 `CharucoDetector`、`Board.matchImagePoints` 和 `calibrateCameraExtended`；`calibration` 负责检测和 schema 封装，数值优化仍由 OpenCV 完成。棋盘格模式才使用 `findChessboardCornersSB`。
 
+如果有效图片为 0，先检查 `--pattern-size` 的列、行方向以及字典是否与打印板一致。程序会在 ChArUco 检测全部失败时额外尝试交换列/行；如果发现例如 `7x5`，会把可直接复制的修正参数写入错误信息。当前项目随附照片对应 `7x5`，不是 `5x7`。
+
+标定命令成功不代表样本质量一定足够。应检查输出中的 `calibration.reprojection_error_px`、`per_view_errors_px`、`detection_rejected_images` 和 `outlier_rejected_images`。通常应重新拍摄覆盖画面中心、四角、不同距离和倾角的清晰图片；标定板应占画面较大区域且保持平整。重投影误差约 10 px 的结果不建议安装为后端默认参数。
+
 ## 3. 单图外参
 
 ```bash
@@ -125,7 +129,7 @@ uv run python -m calibration extrinsics \
   --image data/calibration/pose/center.png \
   --parameters params/camera_parameters.json \
   --type charuco \
-  --pattern-size 5x7 \
+  --pattern-size 7x5 \
   --square-size 30 \
   --marker-length 22 \
   --dictionary DICT_5X5_100 \

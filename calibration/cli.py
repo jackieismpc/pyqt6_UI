@@ -21,7 +21,7 @@ DEFAULT_PARAMETERS = PROJECT_ROOT / "backend" / "crystalvol" / "defaults" / "cam
 # 项目实际使用 ChArUco。棋盘格仍然可通过 --type chessboard 显式选择，
 # 但所有不写 --type 的命令必须生成同一套 ChArUco 参数，避免板型和检测器错配。
 DEFAULT_PATTERN_TYPE = "charuco"
-DEFAULT_PATTERN_SIZE = "5x7"       # 方格列数 x 行数
+DEFAULT_PATTERN_SIZE = "7x5"       # 方格列数 x 行数；与当前项目标定板一致
 DEFAULT_SQUARE_SIZE = 30.0          # mm
 DEFAULT_MARKER_LENGTH = 22.0        # mm，约为方格边长的 73%
 DEFAULT_DICTIONARY = "DICT_5X5_100"
@@ -34,7 +34,7 @@ def _add_board_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--pattern-size", default=DEFAULT_PATTERN_SIZE,
-        help="列x行；棋盘格表示内角点，ChArUco 表示方格。默认 5x7。",
+        help="列x行；棋盘格表示内角点，ChArUco 表示方格。默认 7x5。",
     )
     parser.add_argument(
         "--square-size", type=float, default=DEFAULT_SQUARE_SIZE,
