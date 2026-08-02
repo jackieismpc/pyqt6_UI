@@ -14,12 +14,10 @@ wheels/
 Thumbs.db
 desktop.ini
 
-# 保存的推理结果（以数字日期命名）
-/assets/[0-9]*/
-
-# 大型测试数据（视频、原始采集数据）— 不纳入版本控制
-backend/data/inputs/*
-backend/data/raw/*
+# 运行数据：原始采集、标定图片、临时文件和推理结果均不纳入版本控制。
+# data/README.md 用于说明目录约定，保留在 Git 中。
+/data/*
+!/data/README.md
 
 # 临时标定文件
 charuco_*.png
