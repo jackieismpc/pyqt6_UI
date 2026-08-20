@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>透明晶体体积估计 · Web</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 顶部控制栏 -->
+    <header id="control-bar">
+      <div id="mode-tabs">
+        <button class="mode-tab active" data-mode="video">视频文件</button>
+        <button class="mode-tab" data-mode="zip">图片目录 (zip)</button>
+        <button class="mode-tab" data-mode="path">服务器路径</button>
+        <button class="mode-tab" data-mode="realtime">实时摄像头</button>
+      </div>
+      <div id="mode-controls">
+        <div class="mode-pane active" id="pane-video">
+          <input type="file" id="video-file" accept="video/*">
+          <span class="hint">上传 mp4/mov/avi/mkv</span>
+        </div>
+        <div class="mode-pane" id="pane-zip">
+          <input type="file" id="zip-file" accept=".zip">
+          <span class="hint">上传包含图片的 zip 压缩包</span>
+        </div>
+        <div class="mode-pane" id="pane-path">
+          <input type="text" id="server-path" placeholder="例如 /data/crystal/images 或 /data/crystal/video.mp4">
+          <span class="hint">服务器本地路径（图片目录或视频文件）</span>
+        </div>
+        <div class="mode-pane" id="pane-realtime">
+          <select id="camera-select"></select>
+          <button id="btn-capture" class="primary">拍摄</button>
+          <button id="btn-rt-end" class="secondary">结束会话</button>
+          <span class="hint" id="rt-count">已拍 0 张</span>
+        </div>
+        <label id="frames-field">
+          抽帧数
+          <input type="number" id="num-frames" value="7" min="1" max="30">
+        </label>
+        <button id="btn-run" class="primary">开始估计</button>
+        <button id="btn-cancel" class="danger hidden">取消</button>
+      </div>
+      <div id="progress-row" class="hidden">
+        <div id="progress-track"><div id="progress-fill"></div></div>
+        <span id="progress-text"></span>
+      </div>
+    </header>
+
+    <!-- 中部三面板 -->
+    <main id="panels">
+      <section class="panel" id="panel-raw">
+        <div class="panel-header"><span>原始输入</span></div>
+        <div class="panel-body"><img id="img-raw" alt="原始输入"><p class="placeholder">（无图像）</p></div>
+      </section>
+      <section class="panel" id="panel-preprocess">
+        <div class="panel-header">
+          <span>预处理后的输入</span>
+          <select id="preprocess-select">
+            <option value="enhanced">低光增强</option>
+            <option value="edges">边缘证据</option>
+            <option value="mask">剪影掩膜</option>
+            <option value="overlay">线框叠加</option>
+            <option value="contour">轮廓提取</option>
+          </select>
+        </div>
+        <div class="panel-body"><img id="img-preprocess" alt="预处理"><p class="placeholder">（无图像）</p></div>
+      </section>
+      <section class="panel" id="panel-geometry">
+        <div class="panel-header"><span>晶体几何模型（估计）</span></div>
+        <div class="panel-body"><img id="img-geometry" alt="几何模型"><p class="placeholder">（无图像）</p></div>
+      </section>
+    </main>
+
+    <!-- 底部结果栏 -->
+    <footer id="result-bar">
+      <div class="stat-block">
+        <span class="stat-caption">估计体积</span>
+        <span class="stat-value" id="volume-label">--</span>
+        <span class="stat-sub" id="volume-sub"></span>
+      </div>
+      <div class="divider"></div>
+      <div class="stat-block">
+        <span class="stat-caption">置信度</span>
+        <span class="stat-value" id="conf-label">--</span>
+      </div>
+      <div class="divider"></div>
+      <div class="stat-block">
+        <span class="stat-caption">尺寸</span>
+        <span class="stat-value dims" id="dims-label"></span>
+      </div>
+      <div class="stat-block frame-nav">
+        <button id="btn-prev">‹ 上一帧</button>
+        <select id="frame-select"></select>
+        <button id="btn-next">下一帧 ›</button>
+      </div>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

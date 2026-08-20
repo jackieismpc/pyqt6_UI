@@ -37,6 +37,11 @@ dependencies = [
     "huggingface-hub",
     "einops",
     "socksio",
+
+    # ---- Web 化前端（Linux 无 GUI 服务器自动使用）----
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "python-multipart>=0.0.9",
 ]
 
 [tool.uv]
