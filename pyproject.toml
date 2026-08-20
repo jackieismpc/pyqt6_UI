@@ -6,7 +6,10 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     # ---- 前端 UI ----
-    "pyqt6>=6.11.0",
+    # pyqt6-qt6 >=6.10 的 Linux wheel 只支持 manylinux_2_34（glibc>=2.34）；
+    # 老 glibc 服务器（如 Ubuntu 20.04 / manylinux_2_31）必须用 6.9.x。
+    "pyqt6>=6.11.0; sys_platform != 'linux'",
+    "pyqt6>=6.9.0,<6.10; sys_platform == 'linux'",
     "pyqt6-stubs>=20250824",
 
     # ---- 图像 / 数值基础 ----
@@ -39,6 +42,11 @@ dependencies = [
 [tool.uv]
 # 本项目以「应用」方式运行（python main.py），不需要把根目录本身打成 wheel。
 package = false
+# 让锁同时覆盖 Linux x86_64，确保在 macOS/Windows 上生成的 uv.lock
+# 也能在 Linux 服务器直接 uv sync，而不会锁定到没有兼容 wheel 的版本。
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
 
 [tool.uv.sources]
 # SAM2 以源码可编辑方式接入（源码在 backend/third_party/sam2）。
