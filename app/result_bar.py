@@ -32,7 +32,7 @@ class ResultBar(QWidget):
         row.setSpacing(20)
 
         # ---- 指标一：估计体积（紧凑）----
-        row.addLayout(self._make_stat_block("估计体积", "volume_label"))
+        row.addLayout(self._make_stat_block("估计体积", "volume_label", "volume_sub_label"))
 
         # ---- 细分隔线 ----
         divider1 = QWidget()
@@ -81,8 +81,11 @@ class ResultBar(QWidget):
         self.btn_next.clicked.connect(self._on_next_clicked)
         self.frame_combo.currentIndexChanged.connect(self._on_combo_changed)
 
-    def _make_stat_block(self, caption: str, value_attr: str) -> QVBoxLayout:
-        """构造一个"小标题 + 大数值"的指标块，并把数值 QLabel 存到 self.<value_attr>。"""
+    def _make_stat_block(self, caption: str, value_attr: str, sub_attr: str = "") -> QVBoxLayout:
+        """构造一个"小标题 + 大数值"的指标块，并把数值 QLabel 存到 self.<value_attr>。
+
+        sub_attr 非空时额外加一行灰色小字（用于体积不确定性 ±% / 深度来源标注）。
+        """
         box = QVBoxLayout()
         box.setSpacing(1)
         cap = QLabel(caption)
@@ -92,6 +95,12 @@ class ResultBar(QWidget):
         box.addWidget(cap)
         box.addWidget(value)
         setattr(self, value_attr, value)
+        if sub_attr:
+            sub = QLabel("")
+            sub.setObjectName("panelSecondary")
+            sub.setStyleSheet("font-size: 11px; color: #86868b;")
+            box.addWidget(sub)
+            setattr(self, sub_attr, sub)
         return box
 
     def clear(self):
@@ -100,6 +109,7 @@ class ResultBar(QWidget):
         self.volume_label.setText("--")
         self.conf_label.setText("--")
         self.dims_label.setText("")
+        self.volume_sub_label.setText("")
         self.conf_label.setToolTip("")
         self.volume_label.setToolTip("")
         self.conf_label.setStyleSheet(
@@ -134,6 +144,24 @@ class ResultBar(QWidget):
             return
         frame_index = max(0, min(frame_index, len(res.frames) - 1))
         fr = res.frames[frame_index]
+
+        # ---- 体积不确定性 / 深度来源标注（写在体积下方小字） ----
+        geometry = res.aggregate_geometry or {}
+        uncertainty_pct = geometry.get("volume_uncertainty_pct")
+        depth_source = geometry.get("depth_source", "")
+        if uncertainty_pct is not None:
+            if depth_source == "cross_frame_projection_range":
+                source_note = "多视角约束"
+            elif depth_source == "adaptive_single_view_shape_prior":
+                source_note = "先验深度"
+            else:
+                source_note = ""
+            note = f"±{uncertainty_pct:g}%"
+            if source_note:
+                note += f" · {source_note}"
+            self.volume_sub_label.setText(note)
+        else:
+            self.volume_sub_label.setText("")
 
         # ---- 体积与尺寸 ----
         metric = res.metric if isinstance(res.metric, dict) else None

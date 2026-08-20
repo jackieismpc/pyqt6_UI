@@ -67,11 +67,15 @@ def _row_extents(mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     ys, xs = np.where(mask > 0)
     if len(ys) == 0:
         return left, right, width
-    for y in np.unique(ys):
-        row_xs = xs[ys == y]
-        left[y] = float(row_xs.min())
-        right[y] = float(row_xs.max())
-        width[y] = right[y] - left[y]
+    # 向量化：用 minimum.at / maximum.at 一次完成每行最小/最大 x。
+    left_fill = np.full(h, w, dtype=np.float32)
+    right_fill = np.full(h, -1.0, dtype=np.float32)
+    np.minimum.at(left_fill, ys, xs)
+    np.maximum.at(right_fill, ys, xs)
+    valid = right_fill >= 0
+    left[valid] = left_fill[valid]
+    right[valid] = right_fill[valid]
+    width[valid] = right[valid] - left[valid]
     return left, right, width
 
 
@@ -79,13 +83,15 @@ def _edge_support(edge_map: np.ndarray, p: Tuple[float, float], q: Tuple[float, 
     """一条线段被边缘证据支持的比例（沿线采样，看邻域是否有边缘）。"""
     dilated = cv2.dilate(edge_map, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius | 1, radius | 1)))
     n = 24
-    hits = 0
     h, w = edge_map.shape[:2]
-    for t in np.linspace(0.0, 1.0, n):
-        x = int(round(p[0] * (1 - t) + q[0] * t))
-        y = int(round(p[1] * (1 - t) + q[1] * t))
-        if 0 <= x < w and 0 <= y < h and dilated[y, x] > 0:
-            hits += 1
+    # 向量化：一次性生成全部采样点并索引，替代逐点 Python 循环。
+    ts = np.linspace(0.0, 1.0, n)
+    xs = np.round(p[0] * (1.0 - ts) + q[0] * ts).astype(np.int32)
+    ys = np.round(p[1] * (1.0 - ts) + q[1] * ts).astype(np.int32)
+    valid = (xs >= 0) & (xs < w) & (ys >= 0) & (ys < h)
+    hits = 0
+    if np.any(valid):
+        hits = int(np.count_nonzero(dilated[ys[valid], xs[valid]] > 0))
     return hits / float(n)
 
 

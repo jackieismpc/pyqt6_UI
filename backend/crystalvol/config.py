@@ -181,6 +181,9 @@ class Stage1Config:
     frame_end_ratio: float = 1.0
     max_session_frames: int = 120  # 实时会话只保留最近窗口，避免长期重拟合无限增长
     candidate_top_k: int = 3        # 每帧写入结果 JSON、供第二阶段复评的候选数
+    # 跨帧投影宽度约束：同一晶体多视角拍摄时，投影宽度范围可以约束单目深度。
+    # (max-min)/median 超过该阈值才认为视角覆盖足够，启用观测约束；否则回退形状先验。
+    cross_frame_depth_min_spread: float = 0.15
 
     preprocess: PreprocessConfig = field(default_factory=PreprocessConfig)
     localize: LocalizeConfig = field(default_factory=LocalizeConfig)

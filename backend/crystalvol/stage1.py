@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import cv2
 import numpy as np
@@ -34,6 +34,10 @@ from .segmentation import CrystalSegmenter
 from .silhouette import extract_silhouette
 from .visualize import render_contour_image, render_geometry_preview, render_overlay, write_obj
 from .wireframe import WireframeResult, fit_wireframe
+
+
+class Stage1Cancelled(RuntimeError):
+    """任务被外部取消（Web/UI 中断请求）。"""
 
 
 @dataclass
@@ -299,34 +303,89 @@ def _select_consensus_pool(frame_outputs: List[FrameOutput]) -> List[FrameOutput
     # 全部偏弱：退而取质量最高的前 3 帧
     return sorted(frame_outputs, key=lambda f: _score_candidate(f.wireframe), reverse=True)[:3]
 
+def _robust_values(
+    values: np.ndarray,
+    weights: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """按 MAD 剔除离群值，返回 (保留值, 保留权重)。"""
+    median = float(np.median(values))
+    mad = float(np.median(np.abs(values - median))) + 1e-6
+    keep = np.abs(values - median) <= 3.5 * mad
+    if keep.sum() >= 1:
+        return values[keep], weights[keep]
+    return values, weights
 
-def _consolidate_geometry(pool: List[FrameOutput]) -> Dict[str, float]:
+
+def _weighted_mean(values: np.ndarray, weights: np.ndarray) -> float:
+    return float(np.sum(values * weights) / max(np.sum(weights), 1e-9))
+
+
+def _volume_uncertainty_pct(depth_source: str, confidence: float) -> float:
+    """由深度来源与形状先验置信度估计体积相对误差（透明启发式，用于 UI 标注）。
+
+    体积 V = L×W×(Hb+Hp/3)，其中 W（单目深度）是不确定性的主要来源：
+    多视角投影范围是观测约束，误差带更小；纯单视角形状先验默认至少 ±20%。
+    """
+    conf = float(np.clip(confidence, 0.0, 1.0))
+    if depth_source == "cross_frame_projection_range":
+        return round(10.0 + (1.0 - conf) * 15.0, 1)
+    return round(20.0 + (1.0 - conf) * 40.0, 1)
+
+
+def _consolidate_geometry(pool: List[FrameOutput], cfg: Stage1Config) -> Dict[str, float]:
     """把多帧鲁棒共识成单一晶体几何。
 
-    每个参数：先按 MAD 剔除离群帧（如某帧 length 明显偏大），再对剩余帧做质量加权平均。"""
-    from .geometry import compute_volume
-
+    顺序：先按 MAD 剔除离群帧并做质量加权，合并观测到的 length/body/pyramid；
+    深度方向 width 优先用「跨帧投影宽度范围」约束——多视角拍摄时，投影宽度的
+    上/下分位观测分别约束 L/W；否则回退每帧形状先验的比例（W = L × 比例，
+    保证 V=L×W×(Hb+Hp/3) 内部一致，而不是四个参数各自独立平均后比例失真）。
+    """
     weights_all = np.array([_frame_weight(f) for f in pool], dtype=np.float64)
 
     def robust(key: str) -> float:
         vals = np.array([f.wireframe.geometry_px[key] for f in pool], dtype=np.float64)
-        w = weights_all.copy()
-        med = float(np.median(vals))
-        mad = float(np.median(np.abs(vals - med))) + 1e-6
-        keep = np.abs(vals - med) <= 3.5 * mad
-        if keep.sum() >= 1:
-            vals, w = vals[keep], w[keep]
-        return float(np.sum(vals * w) / max(np.sum(w), 1e-9))
+        kept, kept_w = _robust_values(vals, weights_all)
+        return _weighted_mean(kept, kept_w)
 
     length = robust("length_px")
-    width = robust("width_px")
     body = robust("body_height_px")
     pyramid = robust("pyramid_height_px")
+
+    # 跨帧投影宽度约束：多视角下 length_px 的观测范围同时编码 L 与 W。
+    length_vals = np.array(
+        [f.wireframe.geometry_px["length_px"] for f in pool], dtype=np.float64
+    )
+    kept_len, kept_len_w = _robust_values(length_vals, weights_all)
+    spread = (
+        (float(kept_len.max()) - float(kept_len.min())) / max(float(np.median(kept_len)), 1e-9)
+        if len(kept_len) >= 2 else 0.0
+    )
+    threshold = max(float(cfg.cross_frame_depth_min_spread), 1e-3)
+    use_cross_frame = len(kept_len) >= 2 and spread >= threshold
+    if use_cross_frame:
+        # 投影宽度上分位 ≈ 正对视图（L），下分位 ≈ 侧向视图（W）。
+        med_len = float(np.median(kept_len))
+        hi = kept_len >= med_len
+        lo = kept_len <= med_len
+        length = _weighted_mean(kept_len[hi], kept_len_w[hi])
+        width = _weighted_mean(kept_len[lo], kept_len_w[lo])
+        width = min(width, length)  # 防御：退化解
+        depth_source = "cross_frame_projection_range"
+        confidence = float(np.clip(0.55 + spread, 0.6, 1.0))
+    else:
+        # 回退形状先验：比例来自每帧自适应先验，W = L × 比例（一致性修正）。
+        ratio = robust("depth_ratio_estimate")
+        width = length * ratio
+        depth_source = "adaptive_single_view_shape_prior"
+        confidence = robust("shape_prior_confidence")
+
     return {
         "length_px": length, "width_px": width,
         "body_height_px": body, "pyramid_height_px": pyramid,
         "total_height_px": body + pyramid,
         "volume_px3": compute_volume(length, width, body, pyramid),
+        "depth_source": depth_source,
+        "volume_uncertainty_pct": _volume_uncertainty_pct(depth_source, confidence),
     }
 
 
@@ -340,23 +399,20 @@ def _consolidate_candidate_records(records: list[Dict[str, object]]) -> Dict[str
         * max(float(record.get("score", 0.0)), 0.1)
         for record in records
     ], dtype=np.float64)
-    keys = ("length_px", "width_px", "body_height_px", "pyramid_height_px")
-
     def robust(key: str) -> float:
         values = np.asarray([
             float(dict(record.get("geometry_px", {})).get(key, 0.0))
             for record in records
         ], dtype=np.float64)
-        median = float(np.median(values))
-        mad = float(np.median(np.abs(values - median))) + 1e-6
-        keep = np.abs(values - median) <= 3.5 * mad
-        if not np.any(keep):
-            keep = np.ones(len(values), dtype=bool)
-        values = values[keep]
-        weights = weights_all[keep]
-        return float(np.sum(values * weights) / max(np.sum(weights), 1e-9))
+        kept, kept_w = _robust_values(values, weights_all)
+        return _weighted_mean(kept, kept_w)
 
-    length, width, body, pyramid = [robust(key) for key in keys]
+    # W 由 L × 深度比例推导，避免候选几何内部比例失真（与主聚合一致）。
+    length = robust("length_px")
+    body = robust("body_height_px")
+    pyramid = robust("pyramid_height_px")
+    ratio = robust("depth_ratio_estimate")
+    width = length * ratio
     return {
         "length_px": length,
         "width_px": width,
@@ -419,8 +475,16 @@ def _candidate_geometry_options(pool: List[FrameOutput]) -> list[Dict[str, objec
     return sorted(options, key=lambda item: float(item["stage1_score"]), reverse=True)
 
 
-def run_stage1(cfg: Stage1Config) -> Dict[str, object]:
-    """第一阶段主入口。"""
+def run_stage1(
+    cfg: Stage1Config,
+    progress_callback: Optional[Callable[[int], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> Dict[str, object]:
+    """第一阶段主入口。
+
+    progress_callback: 每成功处理一帧后调用，参数为已处理帧数（供 Web 进度轮询）。
+    should_cancel:     返回 True 时在下一帧开始前抛 Stage1Cancelled，任务可安全中断。
+    """
     section("第一阶段：像素域轮廓与线框重建")
     frames = iter_inputs(
         cfg.input_path, cfg.num_frames, cfg.frame_start_ratio, cfg.frame_end_ratio, cfg.max_input_side,
@@ -437,6 +501,8 @@ def run_stage1(cfg: Stage1Config) -> Dict[str, object]:
     processed_count = 0
     try:
         for frame in frames:
+            if should_cancel is not None and should_cancel():
+                raise Stage1Cancelled("任务已被取消")
             try:
                 out = _process_frame(frame, cfg, segmenter)
                 write_frame_products(layout, out)
@@ -449,6 +515,8 @@ def run_stage1(cfg: Stage1Config) -> Dict[str, object]:
                 continue
             frame_outputs.append(out)
             processed_count += 1
+            if progress_callback is not None:
+                progress_callback(processed_count)
     except Exception:
         if segmenter is not None:
             segmenter.close()
@@ -547,7 +615,7 @@ def finalize_stage1(cfg: Stage1Config, layout: OutputLayout,
     """
     # 跨帧联合拟合出「一个」晶体几何
     pool = _select_consensus_pool(frame_outputs)
-    geometry_px = _consolidate_geometry(pool)
+    geometry_px = _consolidate_geometry(pool, cfg)
     candidate_options = _candidate_geometry_options(pool)
     pool_names = [f.frame.name for f in pool]
     representative = max(pool, key=lambda f: _score_candidate(f.wireframe))
@@ -567,13 +635,16 @@ def finalize_stage1(cfg: Stage1Config, layout: OutputLayout,
     _shutil.copyfile(layout.overlay(representative.frame.name), layout.root / "crystal_overlay.png")
 
     fit_ready_count = sum(1 for f in frame_outputs if f.wireframe.fit_ready)
+    # depth_source / volume_uncertainty_pct 是字符串/元数据，不能放进 stage2 的
+    # 纯 float geometry_params_px；作为顶层字段供 UI 与诊断使用。
     geometry_payload = {
         "units": "pixel",
-        "geometry_params_px": {k: v for k, v in geometry_px.items() if k != "volume_px3"},
+        "geometry_params_px": {k: v for k, v in geometry_px.items() if k not in ("volume_px3", "depth_source")},
         "volume_px3": geometry_px["volume_px3"],
         "selected_candidate": "per_frame_ensemble",
         "candidate_geometries": candidate_options,
-        "depth_estimation_source": frame_outputs[0].wireframe.depth_source if frame_outputs else "none",
+        "depth_estimation_source": geometry_px.get("depth_source", "adaptive_single_view_shape_prior"),
+        "volume_uncertainty_pct": geometry_px.get("volume_uncertainty_pct", 0.0),
         "vertices_px": vertices.astype(float).tolist(),
         "edge_index_pairs": [list(e) for e in edge_index_pairs()],
         "note": "volume_px3 仅供第一阶段相对比较；真实体积需第二阶段用尺度锚点或外参恢复。",
