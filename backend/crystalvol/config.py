@@ -84,7 +84,7 @@ class EdgeConfig:
 
     backend 可选：
     - auto    ：同时尝试 canny 与 pidinet(+canny)，按线框质量自动择优（推荐）
-    - pidinet ：深度边缘 PiDiNet（对反光/暗图鲁棒，需权重，可自动下载）
+    - pidinet ：深度边缘 PiDiNet（对反光/暗图鲁棒，使用项目内本地权重）
     - hed     ：深度边缘 HED（备选深度模型）
     - canny   ：仅传统 Canny（完全离线、零下载）
     - lsd     ：仅直线段检测（主要用于直棱线）
@@ -108,8 +108,8 @@ class SegmentationConfig:
     """YOLO-World + SAM2 分割配置（只保留最大晶体）。"""
 
     enable: bool = True              # 关闭时纯靠边缘提取剪影
-    use_yolo: bool = False           # 是否用 YOLO-World 选框（需联网下载 CLIP，透明物体常检不到；
-                                     # 默认 False：直接用中心先验框 + 中心正点提示 SAM2，更稳更省依赖）
+    use_yolo: bool = False           # 是否用 YOLO-World 选框（默认权重已在项目内；透明物体常检不到；
+                                     # 默认 False：直接用中心先验框 + 中心正点提示 SAM2，更稳）
     world_model_path: str = _DEFAULT_WORLD_MODEL
     sam2_checkpoint_path: str = _DEFAULT_SAM2_CKPT
     sam2_config_path: str = _DEFAULT_SAM2_CFG

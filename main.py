@@ -13,9 +13,13 @@ import os as _os
 import sys
 
 # ── 完全离线运行：禁止所有 HuggingFace / transformers 联网 ──
-_os.environ.setdefault("HF_HUB_OFFLINE", "1")
-_os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-_os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+_os.environ["HF_HUB_OFFLINE"] = "1"
+_os.environ["TRANSFORMERS_OFFLINE"] = "1"
+_os.environ["HF_DATASETS_OFFLINE"] = "1"
+_os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+_os.environ["WANDB_DISABLED"] = "true"
+_os.environ["WANDB_MODE"] = "disabled"
+_os.environ["ULTRALYTICS_OFFLINE"] = "1"
 
 
 def _want_web(argv: list[str]) -> bool:

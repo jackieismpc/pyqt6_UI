@@ -44,8 +44,13 @@ def _ensure_backend_importable() -> None:
     """把 backend 源码目录加入导入路径，并保持推理离线。"""
     import os
 
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
-    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
+    os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+    os.environ["WANDB_DISABLED"] = "true"
+    os.environ["WANDB_MODE"] = "disabled"
+    os.environ["ULTRALYTICS_OFFLINE"] = "1"
     backend_string = str(_BACKEND_DIR)
     if backend_string not in sys.path:
         sys.path.insert(0, backend_string)

@@ -19,6 +19,16 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 # 真正无法读帧时管线会明确报错，不会被这条掩盖。
 os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "-8")
 
+# 后端 CLI 也必须和 GUI/Web 一样完全离线。所有模型都必须通过项目内的
+# backend/weights 路径加载；缺失时直接给出错误/回退，不允许运行时从 Hub 下载。
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_DATASETS_OFFLINE"] = "1"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+os.environ["WANDB_DISABLED"] = "true"
+os.environ["WANDB_MODE"] = "disabled"
+os.environ["ULTRALYTICS_OFFLINE"] = "1"
+
 from crystalvol.cli import main
 
 if __name__ == "__main__":

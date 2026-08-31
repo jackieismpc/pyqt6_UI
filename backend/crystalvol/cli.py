@@ -80,7 +80,11 @@ def _add_edge_args(p: argparse.ArgumentParser) -> None:
     g.add_argument("--no-fuse-canny", action="store_true", help="深度边缘不与 Canny 融合。")
     g.add_argument("--deep-threshold", type=float, default=0.12, help="深度边缘概率二值化阈值。默认 0.12。")
     g.add_argument("--deep-input-max-side", type=int, default=1024, help="深度模型推理前缩放的最长边。默认 1024。")
-    g.add_argument("--deep-repo", default="lllyasviel/Annotators", help="PiDiNet/HED 权重的 HuggingFace 仓库。")
+    g.add_argument(
+        "--deep-repo",
+        default=str(Path(__file__).resolve().parents[1] / "weights"),
+        help="PiDiNet/HED 本地权重目录；默认使用项目内 backend/weights。",
+    )
     g.add_argument("--canny-low", type=int, default=24, help="Canny 低阈值。默认 24。")
     g.add_argument("--canny-high", type=int, default=72, help="Canny 高阈值。默认 72。")
     g.add_argument(

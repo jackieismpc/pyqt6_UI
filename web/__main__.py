@@ -11,9 +11,13 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 # 完全离线运行（与 main.py 一致）
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_DATASETS_OFFLINE"] = "1"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+os.environ["WANDB_DISABLED"] = "true"
+os.environ["WANDB_MODE"] = "disabled"
+os.environ["ULTRALYTICS_OFFLINE"] = "1"
 
 
 def main(argv=None) -> int:
@@ -38,18 +42,9 @@ def main(argv=None) -> int:
 
 
 def _lan_ip() -> str | None:
-    """探测本机局域网 IP（用于提示其他电脑的访问地址）。"""
-    import socket
-
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            sock.connect(("8.8.8.8", 80))
-            return sock.getsockname()[0]
-        finally:
-            sock.close()
-    except Exception:
-        return None
+    """返回手工配置的局域网地址，不做任何网络探测。"""
+    address = os.environ.get("CRYSTAL_LAN_IP", "").strip()
+    return address or None
 
 
 if __name__ == "__main__":

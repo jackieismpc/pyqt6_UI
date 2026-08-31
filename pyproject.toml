@@ -32,7 +32,7 @@ dependencies = [
     "iopath",
     "SAM-2",
 
-    # ---- 深度边缘前端：PiDiNet / HED（权重首次运行自动从 HuggingFace 下载）----
+    # ---- 深度边缘前端：PiDiNet / HED（只使用项目内 backend/weights 权重）----
     "controlnet-aux",
     "huggingface-hub",
     "einops",

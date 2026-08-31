@@ -48,7 +48,29 @@ uv sync
 uv run python main.py
 ```
 
-如果权重显示为几百字节的文本指针，说明 LFS 没有拉取成功：运行 `git lfs pull`，或从已有机器复制 `backend/weights/` 下的四个权重文件。权重较大但属于模型资产，继续由 Git LFS 跟踪；原始视频、图片和结果不应放入 Git。
+### 离线运行和跨平台启动
+
+日常运行建议直接使用项目根目录的启动脚本，不需要手工输入 Python 命令：
+
+```text
+Windows 双击或命令行：start_offline.bat
+Windows PowerShell：.\start_offline.ps1
+Linux/macOS：./start_offline.sh
+```
+
+Linux/macOS 首次使用时执行一次 `chmod +x start_offline.sh`；之后即可直接运行该脚本。
+
+脚本会自动进入项目目录，优先使用项目内 `.venv`，然后执行离线预检，最后启动 `main.py`。可以把参数继续传给程序，例如：
+
+```powershell
+.\start_offline.ps1 --web --port 8000
+```
+
+只检查环境而不启动界面，可使用 `--check`。脚本统一设置 Hugging Face、Ultralytics、Weights & Biases 和 uv 的离线开关；运行时不会下载模型、访问模型仓库或发送遥测。Web 模式默认只显示本机地址；如果确实需要提示一个已知的局域网地址，可手工设置 `CRYSTAL_LAN_IP`，程序不会主动探测外部地址。
+
+如果项目内没有 `.venv`，脚本只会尝试执行 `uv sync --offline --locked --no-python-downloads`，也就是使用本机已有缓存完成同步；缓存不完整时会直接失败，不会回退到联网安装。建议在目标机器所属的操作系统和 CPU 架构上预置依赖。`.venv`、PyTorch、OpenCV 和 PyQt6 含有平台相关的原生组件，不能把 Windows 环境直接复制给 Linux 或 macOS；本项目提供的是同一份源码、配置和模型资产的跨平台离线包，依赖环境需要按目标系统分别准备。
+
+启动脚本会检查 Python 3.13、核心依赖、SAM2/PiDiNet/HED/YOLO 本地权重和相机参数文件。若权重显示为几百字节的文本指针，说明 LFS 没有拉取成功：运行 `git lfs pull`，或从已有机器复制 `backend/weights/` 下的四个真实权重文件。权重较大但属于模型资产，继续由 Git LFS 跟踪；原始视频、图片和结果不应放入 Git。
 
 ## 相机参数统一规则
 
