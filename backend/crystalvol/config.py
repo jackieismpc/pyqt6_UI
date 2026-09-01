@@ -76,6 +76,12 @@ class LocalizeConfig:
     fullframe_area_ratio: float = 0.45       # 晶体块超过该占比 -> 直接用整幅（大晶体）
     large_regime_area_ratio: float = 0.06    # 显著性总面积超过该占比判为「大晶体」：改用大核闭运算合并碎块
     # （实测：小晶体视频帧总显著面积≈0.03-0.04，大/低对比晶体 test.jpg≈0.095，取 0.06 分界）
+    # 可选固定目标框，使用整幅图归一化坐标 (x1, y1, x2, y2)，用于多目标/背景复杂场景。
+    target_roi: Optional[Tuple[float, float, float, float]] = None
+    # 连续视频或实时拍摄时，用上一帧的目标位置约束当前帧，避免跳到高光/遮挡条。
+    tracking_enabled: bool = True
+    tracking_max_jump_ratio: float = 0.35  # 目标中心允许的最大跳变（相对图像对角线）
+    tracking_force: bool = False  # 图片目录默认逐帧定位；需要时显式强制跨图跟踪
 
 
 @dataclass
@@ -184,6 +190,9 @@ class Stage1Config:
     # 跨帧投影宽度约束：同一晶体多视角拍摄时，投影宽度范围可以约束单目深度。
     # (max-min)/median 超过该阈值才认为视角覆盖足够，启用观测约束；否则回退形状先验。
     cross_frame_depth_min_spread: float = 0.15
+    # 相机参数和去畸变：未提供参数时保持像素域流程可用，不阻断处理。
+    camera_parameters: Optional[str] = None
+    undistort: bool = True
 
     preprocess: PreprocessConfig = field(default_factory=PreprocessConfig)
     localize: LocalizeConfig = field(default_factory=LocalizeConfig)

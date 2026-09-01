@@ -22,8 +22,9 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from .config import Stage1Config
+from .camera_parameters import CameraParameters, load_camera_calibration
 from .io import InputFrame, OutputLayout, _resize_max_side
-from .logging_utils import log, section
+from .logging_utils import log, section, warn
 from .segmentation import CrystalSegmenter
 from .stage1 import (
     FrameOutput,
@@ -48,6 +49,14 @@ class Stage1Session:
         section("实时增量会话：初始化分割前端（仅一次）")
         self.segmenter: Optional[CrystalSegmenter] = build_segmenter(self.cfg)
         self.frame_outputs: List[FrameOutput] = []
+        self.calibration: Optional[CameraParameters] = None
+        if self.cfg.undistort:
+            try:
+                self.calibration = load_camera_calibration(self.cfg.camera_parameters)
+                log(f"实时会话启用相机去畸变：{self.calibration.source_path}")
+            except Exception as exc:  # noqa: BLE001
+                warn(f"实时会话相机参数加载失败，跳过去畸变：{exc}")
+        self.previous_roi = None
         self._total_count = 0
 
     @property
@@ -73,11 +82,15 @@ class Stage1Session:
         frame = InputFrame(name=frame_name, image_bgr=image,
                            source_path=f"realtime://{frame_name}", index=index)
 
-        out = _process_frame(frame, self.cfg, self.segmenter)
+        out = _process_frame(
+            frame, self.cfg, self.segmenter,
+            previous_roi=self.previous_roi, calibration=self.calibration,
+        )
         write_frame_products(self.layout, out)
         from .stage1 import _release_frame_buffers
         _release_frame_buffers(out)
         self.frame_outputs.append(out)
+        self.previous_roi = out.roi
         self._total_count += 1
         max_frames = max(int(self.cfg.max_session_frames), 1)
         if len(self.frame_outputs) > max_frames:
@@ -94,11 +107,13 @@ class Stage1Session:
         """清空累积帧（开始对一个新晶体建模）；分割器常驻不重建。"""
         self.frame_outputs.clear()
         self._total_count = 0
+        self.previous_roi = None
         self.layout.prepare(clean=clean)
 
     def close(self) -> None:
         """结束会话并释放分割模型和历史元数据。"""
         self.frame_outputs.clear()
+        self.previous_roi = None
         if self.segmenter is not None:
             self.segmenter.close()
             self.segmenter = None

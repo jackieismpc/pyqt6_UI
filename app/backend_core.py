@@ -95,6 +95,7 @@ class BackendCore:
         self,
         aggregate_geometry: dict,
         previous_length_cm: float | None = None,
+        image_size: tuple[int, int] | None = None,
     ) -> dict | None:
         if not aggregate_geometry or not aggregate_geometry.get("length_px"):
             return None
@@ -115,6 +116,7 @@ class BackendCore:
                 aggregate_geometry,
                 self._camera_params,
                 self._camera_config.extrinsic_index,
+                image_size=image_size,
             )
         except (IndexError, RuntimeError, ValueError) as exc:
             logger.warning("无法完成公制换算: %s", exc)
@@ -192,6 +194,15 @@ class BackendCore:
             )
 
         aggregate_geometry = data.get("geometry_px", {})
+        raw_size = data.get("processing_image_size")
+        processing_image_size = None
+        if isinstance(raw_size, (list, tuple)) and len(raw_size) == 2:
+            try:
+                width, height = int(raw_size[0]), int(raw_size[1])
+                if width > 0 and height > 0:
+                    processing_image_size = (width, height)
+            except (TypeError, ValueError):
+                processing_image_size = None
         preview_path = base_dir / "geometry" / "standard_geometry_pixel_preview.png"
         return Stage1Result(
             input=data.get("input", ""),
@@ -206,6 +217,7 @@ class BackendCore:
             metric=data.get("metric"),
             geometry_preview=str(preview_path) if preview_path.exists() else None,
             frames=frames,
+            processing_image_size=processing_image_size,
         )
 
     def run(
@@ -234,6 +246,8 @@ class BackendCore:
             input_path=str(input_path),
             output_dir=output_dir,
             clean_output=True,
+            camera_parameters=self._camera_config.parameter_path,
+            undistort=True,
         )
         if input_type == "video" and "num_frames" in options:
             config.num_frames = int(options["num_frames"])
@@ -246,18 +260,30 @@ class BackendCore:
             should_cancel=should_cancel,
         )
         result = self._load_result_dir(Path(summary["output_dir"]), data=summary)
-        metric = self._compute_metric(result.aggregate_geometry)
+        metric = self._compute_metric(
+            result.aggregate_geometry, image_size=result.processing_image_size
+        )
         if metric:
             result.metric = metric
         return result
 
     def start_realtime_session(self, save: bool = False) -> None:
         _ensure_backend_importable()
+        from crystalvol.config import Stage1Config  # noqa: WPS433
         from crystalvol.session import Stage1Session  # noqa: WPS433
 
         self._cleanup_temporary_outputs()
         output_dir = self._make_output_dir(save, "crystalvol_rt_")
-        self._session = Stage1Session(output_dir=output_dir, clean=True)
+        session_config = Stage1Config(
+            input_path="realtime://camera",
+            output_dir=output_dir,
+            clean_output=True,
+            camera_parameters=self._camera_config.parameter_path,
+            undistort=True,
+        )
+        self._session = Stage1Session(
+            output_dir=output_dir, cfg=session_config, clean=True
+        )
         self._realtime_previous_length_cm = None
 
     def add_realtime_photo(self, image_bgr) -> Stage1Result:
@@ -268,6 +294,7 @@ class BackendCore:
         metric = self._compute_metric(
             result.aggregate_geometry,
             previous_length_cm=self._realtime_previous_length_cm,
+            image_size=result.processing_image_size,
         )
         if metric:
             result.metric = metric

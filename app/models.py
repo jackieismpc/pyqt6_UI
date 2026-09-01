@@ -49,6 +49,7 @@ class Stage1Result:
     geometry_preview: Optional[str]  # 三维几何重建预览图绝对路径
     # (geometry/standard_geometry_pixel_preview.png)，该图是汇总单图，所有帧共用
     frames: list = field(default_factory=list)  # FrameResult 列表，对应顶层 frames，顺序与 json 一致
+    processing_image_size: Optional[tuple[int, int]] = None  # 实际参与计算的像素尺寸 (width, height)
 
 
 def frame_confidence(fr: FrameResult) -> tuple:

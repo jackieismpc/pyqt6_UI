@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+import cv2
 import numpy as np
 
 
@@ -257,6 +258,25 @@ def resolve_camera_matrix_for_image(
     return matrix, calibration.distortion_coeffs.copy()
 
 
+def undistort_image_for_calibration(
+    image_bgr: np.ndarray,
+    calibration: CameraParameters,
+) -> np.ndarray:
+    """按输入图像的实际分辨率去畸变，并保持输出尺寸不变。
+
+    ``iter_inputs`` 会先把超大图等比缩小，因此这里必须使用缩放后的内参，
+    不能直接把标定时的原始矩阵传给 OpenCV。输出仍保持原图尺寸，后续 ROI、
+    边缘和几何量都在同一像素坐标系中计算。
+    """
+    if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
+        raise ValueError("输入图像为空，无法去畸变。")
+    height, width = image_bgr.shape[:2]
+    matrix, distortion = resolve_camera_matrix_for_image(calibration, width, height)
+    if distortion.size == 0 or not np.any(np.abs(distortion) > 1e-12):
+        return image_bgr.copy()
+    return cv2.undistort(image_bgr, matrix, distortion, None, matrix)
+
+
 def save_camera_parameters(path: str | Path, payload: dict[str, Any]) -> Path:
     output_path = Path(path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -300,12 +320,22 @@ def pinhole_pixel_to_cm(
     pixel_geometry: dict[str, float],
     camera_params: CameraParameters,
     extrinsic_index: int = 0,
+    image_size: tuple[int, int] | None = None,
 ) -> dict[str, object]:
     """用选定外参的目标距离做针孔换算，返回 cm 制结果。"""
     ext = camera_params.select_extrinsic(extrinsic_index)
     distance_m = ext.distance_m
-    fx = float(camera_params.camera_matrix[0, 0])
-    fy = float(camera_params.camera_matrix[1, 1])
+    if image_size is None:
+        matrix = camera_params.camera_matrix
+        runtime_size = None
+    else:
+        runtime_width, runtime_height = (int(image_size[0]), int(image_size[1]))
+        matrix, _ = resolve_camera_matrix_for_image(
+            camera_params, runtime_width, runtime_height
+        )
+        runtime_size = [runtime_width, runtime_height]
+    fx = float(matrix[0, 0])
+    fy = float(matrix[1, 1])
     if distance_m <= 0 or fx <= 0 or fy <= 0:
         return {}
 
@@ -335,6 +365,7 @@ def pinhole_pixel_to_cm(
             "cm_per_px": {"x": cm_per_px_x, "y": cm_per_px_y},
             "extrinsic_id": ext.identifier,
             "extrinsic_index": extrinsic_index,
+            "image_size_px": runtime_size or [camera_params.image_width, camera_params.image_height],
         },
     }
 

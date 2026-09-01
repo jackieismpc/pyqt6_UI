@@ -71,6 +71,19 @@ def _add_localize_args(p: argparse.ArgumentParser) -> None:
                    help="ROI 最短边相对整图短边的下限（给小晶体足够上下文）。默认 0.12。")
     g.add_argument("--fullframe-area-ratio", type=float, default=0.45,
                    help="晶体块超过该占比则直接用整幅（大晶体）。默认 0.45。")
+    g.add_argument(
+        "--target-roi", type=float, nargs=4, metavar=("X1", "Y1", "X2", "Y2"),
+        default=None,
+        help="固定目标框，归一化坐标 x1 y1 x2 y2；复杂背景/多目标时可用。",
+    )
+    g.add_argument(
+        "--no-target-tracking", action="store_true",
+        help="关闭连续帧目标跟踪，仅使用每帧显著性定位。",
+    )
+    g.add_argument(
+        "--target-tracking", action="store_true",
+        help="强制对图片目录也启用跨图目标跟踪（视频默认启用）。",
+    )
 
 
 def _add_edge_args(p: argparse.ArgumentParser) -> None:
@@ -135,6 +148,9 @@ def _stage1_from_args(a: argparse.Namespace) -> Stage1Config:
             enable=not a.no_localize, center_weight=a.localize_center_weight,
             roi_pad_ratio=a.roi_pad, min_roi_side_ratio=a.min_roi_side_ratio,
             fullframe_area_ratio=a.fullframe_area_ratio,
+            target_roi=(tuple(a.target_roi) if a.target_roi is not None else None),
+            tracking_enabled=not a.no_target_tracking,
+            tracking_force=a.target_tracking,
         ),
         edge=EdgeConfig(
             backend=a.edge_backend, fuse_canny=not a.no_fuse_canny,
@@ -152,6 +168,8 @@ def _stage1_from_args(a: argparse.Namespace) -> Stage1Config:
         ),
         metric_anchor=_metric_from_args(a),
         candidate_top_k=max(int(a.candidate_top_k), 1),
+        camera_parameters=getattr(a, "camera_parameters", None),
+        undistort=not getattr(a, "no_undistort", False),
     )
 
 
@@ -187,6 +205,10 @@ def build_parser() -> argparse.ArgumentParser:
                        help="亮核收紧：前景内亮度分位，越大越紧（把晶体从背光光晕里分离）。默认 40。")
         p.add_argument("--candidate-top-k", type=int, default=3,
                        help="每帧保留多少个候选供诊断和第二阶段复评。默认 3。")
+        p.add_argument("--camera-parameters", default=None,
+                       help="相机参数 JSON；用于实际分辨率内参缩放、去畸变和公制换算。")
+        p.add_argument("--no-undistort", action="store_true",
+                       help="关闭去畸变（仅在输入不是标定相机画面时使用）。")
         _add_preprocess_args(p)
         _add_localize_args(p)
         _add_edge_args(p)
@@ -214,7 +236,6 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- full ----
     p_full = sub.add_parser("full", help="依次运行第一阶段 + 第二阶段。")
     add_stage1_body(p_full)
-    p_full.add_argument("--camera-parameters", default=None, help="统一相机参数 JSON；省略时使用 params/ 或后端默认参数。")
     p_full.add_argument("--stage2-output-dir", default="data/results/stage2", help="第二阶段输出目录。")
     p_full.add_argument("--mode", choices=["auto", "scale_anchor", "extrinsic_multiview"], default="auto",
                         help="公制恢复模式。默认 auto。")

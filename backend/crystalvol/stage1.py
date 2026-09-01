@@ -23,9 +23,10 @@ import cv2
 import numpy as np
 
 from .config import Stage1Config
+from .camera_parameters import CameraParameters, load_camera_calibration, undistort_image_for_calibration
 from .edges import canny_edge_map, compute_edge_map
 from .geometry import build_vertices, compute_volume, edge_index_pairs
-from .io import InputFrame, OutputLayout, _imwrite, iter_inputs
+from .io import VIDEO_EXTENSIONS, InputFrame, OutputLayout, _imwrite, iter_inputs
 from .localize import RoiResult, locate_crystal
 from .logging_utils import log, section, warn
 from .metric import convert_pixel_to_metric
@@ -55,6 +56,7 @@ class FrameOutput:
     edge_backend: str
     sam2_used: bool
     warnings: List[str]
+    image_size: tuple[int, int]
     candidate_summaries: List[Dict[str, object]] = field(default_factory=list)
     selected_candidate: str = ""
     selection_confidence: float = 0.0
@@ -182,18 +184,41 @@ def _release_candidate_buffers(out: FrameOutput) -> None:
     out.silhouette_contour = None
 
 
-def _process_frame(frame: InputFrame, cfg: Stage1Config, segmenter: Optional[CrystalSegmenter]) -> FrameOutput:
+def _process_frame(
+    frame: InputFrame,
+    cfg: Stage1Config,
+    segmenter: Optional[CrystalSegmenter],
+    previous_roi: Optional[RoiResult] = None,
+    calibration: Optional[CameraParameters] = None,
+) -> FrameOutput:
     """处理单帧：预处理 -> 显著性定位 ROI -> ROI 内(SAM2/边缘/剪影/线框)。"""
-    pre = run_preprocess(frame.image_bgr, cfg.preprocess)
+    if frame.image_bgr is None:
+        raise ValueError(f"[{frame.name}] 输入图像缓冲为空。")
+    image_bgr = frame.image_bgr
+    calibration_warning = None
+    if cfg.undistort and calibration is not None:
+        try:
+            image_bgr = undistort_image_for_calibration(image_bgr, calibration)
+            frame.image_bgr = image_bgr
+        except RuntimeError as exc:
+            # 宽高比不一致通常意味着裁剪/采集模式改变；保留像素域流程，
+            # 但把问题写入帧告警，避免一帧异常拖垮整个目录处理。
+            calibration_warning = f"去畸变跳过：{exc}"
+            warn(f"[{frame.name}] {calibration_warning}")
+    pre = run_preprocess(image_bgr, cfg.preprocess)
     h, w = pre.enhanced_bgr.shape[:2]
 
     # 1) 显著性定位：先在整幅上用一张廉价 Canny 找到最大晶体，裁自适应 ROI
     if cfg.localize.enable:
         coarse_edge = canny_edge_map(pre.enhanced_bgr, cfg.edge)
-        roi = locate_crystal(pre.enhanced_bgr, coarse_edge, pre.specular_mask, cfg.localize)
+        roi = locate_crystal(
+            pre.enhanced_bgr, coarse_edge, pre.specular_mask, cfg.localize,
+            previous_roi=previous_roi,
+        )
     else:
         roi = RoiResult((0, 0, w, h), (w * 0.5, h * 0.5), 1.0, "fullframe", 1.0,
-                        np.zeros((h, w), np.uint8), found=True)
+                        np.zeros((h, w), np.uint8), found=True,
+                        component_bbox=(0, 0, w, h))
     x1, y1, x2, y2 = roi.bbox
     roi_bgr = pre.enhanced_bgr[y1:y2, x1:x2]
     specular_roi = pre.specular_mask[y1:y2, x1:x2]
@@ -204,7 +229,21 @@ def _process_frame(frame: InputFrame, cfg: Stage1Config, segmenter: Optional[Cry
     if segmenter is not None:
         try:
             point = (roi.center[0] - x1, roi.center[1] - y1)
-            sam2_mask = segmenter.segment(roi_bgr, positive_point=point).mask
+            # 自动显著性块可能只覆盖晶体的一条亮棱；在这类透明/强反光图上，
+            # 直接把它当作 SAM2 box prompt 会把掩膜锁在局部。只有用户明确给出
+            # 固定目标框时才信任该框，默认继续使用质心点提示以保持基线稳定性。
+            prompt_box = None
+            if cfg.localize.target_roi is not None:
+                component_box = roi.component_bbox
+                prompt_box = (
+                    max(component_box[0] - x1, 0), max(component_box[1] - y1, 0),
+                    min(component_box[2] - x1, x2 - x1), min(component_box[3] - y1, y2 - y1),
+                )
+                if prompt_box[2] - prompt_box[0] < 3 or prompt_box[3] - prompt_box[1] < 3:
+                    prompt_box = None
+            sam2_mask = segmenter.segment(
+                roi_bgr, prompt_box=prompt_box, positive_point=point
+            ).mask
             sam2_used = True
         except Exception as exc:
             warn(f"[{frame.name}] SAM2 分割失败，转纯边缘剪影：{exc}")
@@ -230,7 +269,9 @@ def _process_frame(frame: InputFrame, cfg: Stage1Config, segmenter: Optional[Cry
                 frame=frame, enhanced_bgr=pre.enhanced_bgr, roi=roi, roi_bgr=roi_bgr,
                 edge_map=edge_result.edge_map, mask=sil.mask, silhouette_contour=sil.contour,
                 wireframe=wf, edge_backend=edge_result.backend_used, sam2_used=sam2_used,
-                warnings=list(roi.warnings) + list(edge_result.warnings) + list(wf.warnings),
+                warnings=(list(roi.warnings) + list(edge_result.warnings) + list(wf.warnings)
+                          + ([calibration_warning] if calibration_warning else [])),
+                image_size=(w, h),
             )
             score, breakdown = _candidate_quality(wf, cfg)
             summary = _candidate_summary(candidate_name, edge_result.backend_used, wf, score, breakdown)
@@ -496,15 +537,36 @@ def run_stage1(
 
     segmenter = build_segmenter(cfg)
 
+    calibration: Optional[CameraParameters] = None
+    if cfg.undistort:
+        try:
+            calibration = load_camera_calibration(cfg.camera_parameters)
+            log(f"启用相机去畸变：{calibration.source_path}")
+        except Exception as exc:  # noqa: BLE001
+            warn(f"相机参数加载失败，跳过去畸变并继续像素域处理：{exc}")
+
     frame_outputs: List[FrameOutput] = []
     failed_frames: list[dict[str, str]] = []
     processed_count = 0
+    previous_roi: Optional[RoiResult] = None
+    input_file = Path(cfg.input_path).expanduser()
+    tracking_active = bool(
+        cfg.localize.tracking_enabled
+        and (cfg.localize.tracking_force
+             or (input_file.is_file() and input_file.suffix.lower() in VIDEO_EXTENSIONS))
+    )
+    if cfg.localize.tracking_enabled and not tracking_active:
+        log("图片目录默认逐帧定位；如需跨图跟踪请显式设置 target_tracking。")
     try:
         for frame in frames:
             if should_cancel is not None and should_cancel():
                 raise Stage1Cancelled("任务已被取消")
             try:
-                out = _process_frame(frame, cfg, segmenter)
+                out = _process_frame(
+                    frame, cfg, segmenter,
+                    previous_roi=previous_roi if tracking_active else None,
+                    calibration=calibration,
+                )
                 write_frame_products(layout, out)
                 _release_frame_buffers(out)
             except Exception as exc:  # noqa: BLE001
@@ -514,6 +576,7 @@ def run_stage1(
                 frame.image_bgr = None
                 continue
             frame_outputs.append(out)
+            previous_roi = out.roi if tracking_active else None
             processed_count += 1
             if progress_callback is not None:
                 progress_callback(processed_count)
@@ -635,6 +698,8 @@ def finalize_stage1(cfg: Stage1Config, layout: OutputLayout,
     _shutil.copyfile(layout.overlay(representative.frame.name), layout.root / "crystal_overlay.png")
 
     fit_ready_count = sum(1 for f in frame_outputs if f.wireframe.fit_ready)
+    image_sizes = {tuple(f.image_size) for f in frame_outputs if f.image_size[0] > 0 and f.image_size[1] > 0}
+    processing_image_size = list(next(iter(image_sizes))) if len(image_sizes) == 1 else None
     # depth_source / volume_uncertainty_pct 是字符串/元数据，不能放进 stage2 的
     # 纯 float geometry_params_px；作为顶层字段供 UI 与诊断使用。
     geometry_payload = {
@@ -684,11 +749,14 @@ def finalize_stage1(cfg: Stage1Config, layout: OutputLayout,
         "consensus_frames": pool_names,
         "consensus_frame_count": len(pool_names),
         "representative_frame": representative.frame.name,
+        "processing_image_size": processing_image_size,
+        "undistort_requested": bool(cfg.undistort),
         "geometry_px": geometry_px,
         "metric": metric_payload,
         "frames": [
             {
                 "name": f.frame.name,
+                "processing_image_size": list(f.image_size),
                 "backend": f.edge_backend,
                 "roi_bbox": list(f.roi.bbox),
                 "roi_scale": f.roi.scale,
