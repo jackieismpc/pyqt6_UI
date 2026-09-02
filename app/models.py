@@ -22,6 +22,10 @@ class FrameResult:
     geometry: dict  # 该帧完整的几何字典，对应 frames[i].geometry_px（保留全部键）
     warnings: list  # 告警信息列表，对应 frames[i].warnings
     images: dict  # 该帧关联的产物图片绝对路径字典
+    localization_mode: str = "auto"
+    roi_bbox: Optional[tuple] = None
+    roi_anchor_bbox: Optional[tuple] = None
+    roi_search_bbox: Optional[tuple] = None
     # images 的键含义：
     #   'raw'      -> inputs/<name>.png              原始输入帧
     #   'enhanced' -> enhanced/<name>_enhanced.png    低光增强

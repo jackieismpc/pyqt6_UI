@@ -190,6 +190,13 @@ class BackendCore:
                     geometry=geometry_px,
                     warnings=frame_data.get("warnings", []),
                     images=self._build_image_paths(base_dir, name),
+                    localization_mode=frame_data.get("localization_mode", "auto"),
+                    roi_bbox=tuple(frame_data["roi_bbox"])
+                    if isinstance(frame_data.get("roi_bbox"), (list, tuple)) else None,
+                    roi_anchor_bbox=tuple(frame_data["roi_anchor_bbox"])
+                    if isinstance(frame_data.get("roi_anchor_bbox"), (list, tuple)) else None,
+                    roi_search_bbox=tuple(frame_data["roi_search_bbox"])
+                    if isinstance(frame_data.get("roi_search_bbox"), (list, tuple)) else None,
                 )
             )
 

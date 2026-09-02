@@ -662,6 +662,14 @@ def write_frame_products(layout: OutputLayout, out: FrameOutput) -> None:
                     if out.silhouette_contour.size else out.silhouette_contour)
     overlay = render_overlay(out.enhanced_bgr, contour_full, wf_full)
     cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 200, 255), max(int(min(overlay.shape[:2]) / 500), 2))
+    if out.roi.mode == "manual_anchor":
+        ax1, ay1, ax2, ay2 = out.roi.anchor_bbox
+        if ax2 > ax1 and ay2 > ay1:
+            # 青色=人工首帧锚点，黄色=当前处理搜索窗；线框仍由 render_overlay 绘制。
+            cv2.rectangle(
+                overlay, (ax1, ay1), (ax2, ay2), (255, 255, 0),
+                max(int(min(overlay.shape[:2]) / 700), 2),
+            )
     # 落盘每帧产物（轮廓提取图在 ROI 上渲染 -> 小晶体自动放大）
     def write_required(path: Path, image: np.ndarray | None) -> None:
         if image is None or not _imwrite(str(path), image):
@@ -764,6 +772,15 @@ def finalize_stage1(cfg: Stage1Config, layout: OutputLayout,
         "representative_frame": representative.frame.name,
         "processing_image_size": processing_image_size,
         "undistort_requested": bool(cfg.undistort),
+        "preselection": {
+            "enabled": bool(cfg.localize.preselection_enabled),
+            "roi_norm": (
+                list(cfg.localize.preselection_roi)
+                if cfg.localize.preselection_roi is not None else None
+            ),
+            "search_margin": float(cfg.localize.preselection_search_margin),
+            "max_jump_ratio": float(cfg.localize.preselection_max_jump_ratio),
+        },
         "geometry_px": geometry_px,
         "metric": metric_payload,
         "frames": [
@@ -772,6 +789,10 @@ def finalize_stage1(cfg: Stage1Config, layout: OutputLayout,
                 "processing_image_size": list(f.image_size),
                 "backend": f.edge_backend,
                 "roi_bbox": list(f.roi.bbox),
+                "localization_mode": f.roi.mode,
+                "roi_anchor_bbox": list(f.roi.anchor_bbox),
+                "roi_search_bbox": list(f.roi.search_bbox),
+                "roi_component_bbox": list(f.roi.component_bbox),
                 "roi_scale": f.roi.scale,
                 "area_ratio": f.roi.area_ratio,
                 "sam2_used": f.sam2_used,

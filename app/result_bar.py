@@ -213,6 +213,7 @@ class ResultBar(QWidget):
         tip = (
             f"{px_vol}{metric_info}\n"
             f"当前帧 {fr.name} 单帧体积：{fr.volume_px3:,.0f} px³（仅诊断）\n"
+            f"定位模式：{'首帧预选锚定' if fr.localization_mode == 'manual_anchor' else '自动定位'}\n"
             f"fit_ready：{'是' if fr.fit_ready else '否'}　可见比：{fr.visible_ratio:.2f}　"
             f"覆盖比：{fr.coverage_ratio:.2f}\n"
             f"fit_ready {res.fit_ready_count}/{res.frame_count}　总体 {agg_label} {agg_pct}%"

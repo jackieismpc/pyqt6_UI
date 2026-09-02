@@ -118,10 +118,22 @@ uv run python backend/run.py full <输入> \
 | `--min-roi-side-ratio` | `0.12` | 小晶体的最小上下文比例。 |
 | `--no-localize` | 关闭 | 仅适合晶体占画面大部分时使用。 |
 | `--no-sam2` | 关闭 | 禁用 SAM2，完全使用传统边缘剪影，适合无权重/快速测试。 |
+
 | `--edge-backend` | `auto` | 自动比较深度边缘与 Canny；`canny` 最省资源、最容易复现。 |
 | `--edge-candidates` | `auto` | 逗号分隔的候选池；支持 `canny,pidinet,pidinet+canny,hed,hed+canny,lsd`。 |
 | `--candidate-top-k` | `3` | 每帧保留并交给第二阶段复评的候选数。 |
 | `--selection-margin-threshold` | `0.05` | 第二阶段第一、第二候选分差低于此值时标记 `ambiguous`。 |
+
+PyQt6 界面支持可选的首帧预选。预选框使用整幅处理图的归一化坐标保存到
+`LocalizeConfig.preselection_roi`，并通过 `preselection_search_margin` 扩展为局部搜索窗；
+启用后图片目录也会强制开启跨图跟踪。预选模式下若局部候选暂时消失，会保留锚点并写入告警，
+不会重新在整幅图中选择另一个高光目标。
+
+| 配置项 | 默认值 | 作用 |
+|---|---:|---|
+| `preselection_enabled` | `False` | 是否启用首帧人工锚定。 |
+| `preselection_search_margin` | `0.50` | 预选框每个方向的搜索窗外扩比例。 |
+| `preselection_max_jump_ratio` | `0.20` | 预选模式下上一帧中心跳变上限（相对整幅图对角线）。 |
 
 ### 线框和晶体形状
 

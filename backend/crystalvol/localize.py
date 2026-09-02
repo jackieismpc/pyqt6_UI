@@ -39,6 +39,9 @@ class RoiResult:
     found: bool = True
     warnings: List[str] = field(default_factory=list)
     component_bbox: Tuple[int, int, int, int] = (0, 0, 0, 0)  # 未外扩的晶体块框
+    mode: str = "auto"  # auto | manual_anchor
+    anchor_bbox: Tuple[int, int, int, int] = (0, 0, 0, 0)  # 人工首帧锚点
+    search_bbox: Tuple[int, int, int, int] = (0, 0, 0, 0)  # 预选模式局部搜索窗
 
 
 def _normalize(arr: np.ndarray) -> np.ndarray:
@@ -382,6 +385,7 @@ def locate_crystal(
             return RoiResult(
                 (x1, y1, x2, y2), (px, py), 0.0, "manual", 0.0, saliency_vis,
                 found=False, warnings=warnings, component_bbox=preselection_box,
+                mode="manual_anchor", anchor_bbox=preselection_box, search_bbox=search_box,
             )
         warnings.append("显著性定位未找到有效晶体块，回退整幅中心区域。")
         if target_box is not None:
@@ -425,4 +429,7 @@ def locate_crystal(
     scale = "small" if area_ratio < 0.02 else ("medium" if area_ratio < 0.15 else "large")
     return RoiResult((x1, y1, x2, y2), (cx, cy), float(min(best_score, 1.0)),
                      scale, area_ratio, saliency_vis, warnings=warnings,
-                     component_bbox=(x, y, x + bw, y + bh))
+                     component_bbox=(x, y, x + bw, y + bh),
+                     mode="manual_anchor" if manual_mode else "auto",
+                     anchor_bbox=preselection_box or (0, 0, 0, 0),
+                     search_bbox=search_box or (0, 0, 0, 0))
