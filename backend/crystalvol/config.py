@@ -78,6 +78,16 @@ class LocalizeConfig:
     # （实测：小晶体视频帧总显著面积≈0.03-0.04，大/低对比晶体 test.jpg≈0.095，取 0.06 分界）
     # 可选固定目标框，使用整幅图归一化坐标 (x1, y1, x2, y2)，用于多目标/背景复杂场景。
     target_roi: Optional[Tuple[float, float, float, float]] = None
+    # 可选人工首帧预选框。与 target_roi 的区别是：预选框是硬空间锚点，后续帧
+    # 只允许在其附近搜索，适合转台上位置固定、姿态变化的同一晶体。
+    preselection_roi: Optional[Tuple[float, float, float, float]] = None
+    # 可选人工正样本点，使用整幅图归一化坐标；为空时默认使用预选框中心。
+    preselection_point: Optional[Tuple[float, float]] = None
+    preselection_enabled: bool = False
+    # 搜索窗口相对预选框的外扩比例。1.0 表示每个方向额外扩展一个预选框尺寸。
+    preselection_search_margin: float = 1.25
+    # 预选模式下上一帧跟踪允许的中心跳变（相对整幅图对角线）。
+    preselection_max_jump_ratio: float = 0.20
     # 连续视频或实时拍摄时，用上一帧的目标位置约束当前帧，避免跳到高光/遮挡条。
     tracking_enabled: bool = True
     tracking_max_jump_ratio: float = 0.35  # 目标中心允许的最大跳变（相对图像对角线）

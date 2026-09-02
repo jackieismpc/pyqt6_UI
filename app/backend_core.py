@@ -254,6 +254,28 @@ class BackendCore:
         if options.get("device"):
             config.device = str(options["device"])
 
+        # UI 的首帧预选以归一化坐标传入，避免输入缩放后像素坐标失效。
+        # 仅在明确启用且框有效时打开硬锚定模式；未启用时保持原有自动定位行为。
+        preselection = options.get("preselection")
+        if isinstance(preselection, dict) and preselection.get("enabled"):
+            roi = preselection.get("roi_norm")
+            if isinstance(roi, (list, tuple)) and len(roi) == 4:
+                config.localize.preselection_roi = tuple(float(value) for value in roi)
+                point = preselection.get("point_norm")
+                if isinstance(point, (list, tuple)) and len(point) == 2:
+                    config.localize.preselection_point = tuple(float(value) for value in point)
+                config.localize.preselection_enabled = True
+                # 图片目录默认逐图独立定位；有首帧锚点时必须启用跨图跟踪。
+                config.localize.tracking_force = True
+                if "search_margin" in preselection:
+                    config.localize.preselection_search_margin = max(
+                        float(preselection["search_margin"]), 0.0
+                    )
+                if "max_jump_ratio" in preselection:
+                    config.localize.preselection_max_jump_ratio = max(
+                        float(preselection["max_jump_ratio"]), 1e-3
+                    )
+
         summary = run_stage1(
             config,
             progress_callback=progress_callback,
@@ -266,6 +288,47 @@ class BackendCore:
         if metric:
             result.metric = metric
         return result
+
+    def load_first_input_frame(
+        self,
+        input_path: str,
+        input_type: str,
+        max_input_side: int = 2304,
+    ) -> dict:
+        """读取批处理输入的第一帧，供 UI 首帧预选使用。
+
+        该方法只做解码、统一缩放和可用时的去畸变，不加载 SAM2/边缘模型，
+        因此可以在主线程中快速完成；返回的图像坐标与 stage1 的处理坐标一致。
+        """
+        if not input_path:
+            raise ValueError("input_path 为空：无法读取首帧。")
+        _ensure_backend_importable()
+        from crystalvol.io import iter_inputs  # noqa: WPS433
+        from crystalvol.camera_parameters import (  # noqa: WPS433
+            load_camera_calibration,
+            undistort_image_for_calibration,
+        )
+
+        frame = next(iter_inputs(str(input_path), num_frames=1, max_input_side=max_input_side))
+        image = frame.image_bgr
+        if image is None:
+            raise RuntimeError("首帧图像为空，无法进行预选。")
+
+        # stage1 的去畸变失败时会保留原图继续处理；这里采用相同的容错策略，
+        # 不能因为预览阶段缺少标定文件而阻断用户框选。
+        if self._camera_config.parameter_path:
+            try:
+                calibration = load_camera_calibration(self._camera_config.parameter_path)
+                image = undistort_image_for_calibration(image, calibration)
+            except Exception:
+                logger.debug("首帧预选去畸变跳过", exc_info=True)
+
+        height, width = image.shape[:2]
+        return {
+            "name": frame.name,
+            "image_bgr": image,
+            "image_size": (int(width), int(height)),
+        }
 
     def start_realtime_session(self, save: bool = False) -> None:
         _ensure_backend_importable()
