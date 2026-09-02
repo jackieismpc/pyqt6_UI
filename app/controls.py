@@ -38,6 +38,9 @@ class ControlBar(QWidget):
     growthRequested = pyqtSignal()
     # 摄像头选择（实时模式）
     cameraChanged = pyqtSignal(str)  # device_id
+    # 首帧预选：打开/关闭人工锚定区域
+    preselectionRequested = pyqtSignal()
+    preselectionCleared = pyqtSignal()
 
     def __init__(self, cameras: list[CameraDevice] | None = None, parent=None):
         super().__init__(parent)
@@ -88,6 +91,15 @@ class ControlBar(QWidget):
         self.frame_spin.setToolTip("视频均匀抽取多少帧参与联合建模（默认 7）")
         layout.addWidget(self.frame_label)
         layout.addWidget(self.frame_spin)
+
+        # 可选首帧预选。按钮保持为 checkable：未选中时使用自动定位，选中时
+        # 点击按钮进入首帧框选；再次点击可清除当前预选并恢复自动定位。
+        self.btn_preselect = QPushButton("预选晶体区域")
+        self.btn_preselect.setCheckable(True)
+        self.btn_preselect.setToolTip(
+            "可选：在视频第一帧或图片第一张上手动框选晶体，后续帧只在附近定位，减少漂移。"
+        )
+        layout.addWidget(self.btn_preselect)
 
         # 保存结果开关（默认不保存；勾选后本次产物写入 data/results/<日期-时间>/）
         self.save_check = QCheckBox("保存结果")
@@ -143,6 +155,7 @@ class ControlBar(QWidget):
         self.btn_image.toggled.connect(self._on_type_toggled)
         self.btn_realtime.toggled.connect(self._on_type_toggled)
         self.btn_run.clicked.connect(self._on_run_clicked)
+        self.btn_preselect.toggled.connect(self._on_preselection_toggled)
         self.btn_capture.clicked.connect(self.captureRequested.emit)
         self.btn_stop_realtime.clicked.connect(self.stopRealtimeRequested.emit)
         self.btn_growth.clicked.connect(self.growthRequested.emit)
@@ -161,6 +174,12 @@ class ControlBar(QWidget):
 
     def _on_run_clicked(self):
         self.runRequested.emit(self.current_input_type())
+
+    def _on_preselection_toggled(self, checked: bool):
+        if checked:
+            self.preselectionRequested.emit()
+        else:
+            self.preselectionCleared.emit()
 
     def _sync_frame_visibility(self):
         """帧数选择器仅在「视频」输入时显示。"""
@@ -215,6 +234,7 @@ class ControlBar(QWidget):
         self.section_label.setVisible(not active)
         self.segmented.setVisible(not active)
         self.btn_run.setVisible(not active)
+        self.btn_preselect.setVisible(not active)
         self.save_check.setVisible(not active)
         if active:
             self.frame_label.setVisible(False)
@@ -234,8 +254,16 @@ class ControlBar(QWidget):
 
     def set_run_enabled(self, enabled: bool):
         self.btn_run.setEnabled(enabled)
+        self.btn_preselect.setEnabled(enabled)
         for btn in (self.btn_video, self.btn_image, self.btn_realtime):
             btn.setEnabled(enabled)
+
+    def set_preselection_state(self, selected: bool):
+        """同步首帧预选按钮状态，避免程序化设置再次触发信号。"""
+        self.btn_preselect.blockSignals(True)
+        self.btn_preselect.setChecked(bool(selected))
+        self.btn_preselect.setText("取消预选" if selected else "预选晶体区域")
+        self.btn_preselect.blockSignals(False)
 
     def set_growth_enabled(self, enabled: bool):
         """控制「生长预测」按钮的可见性（有推理结果时启用）。"""

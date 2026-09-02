@@ -29,6 +29,7 @@ from .controls import ControlBar
 from .growth_dialog import CrystalGrowthDialog
 from .image_panel import ImagePanel
 from .result_bar import ResultBar
+from .roi_selection_dialog import RoiSelectionDialog
 from .widgets import StyledComboBox, apply_card_shadow
 from .workers import RealtimeWorker, RunWorker
 
@@ -54,6 +55,9 @@ class MainWindow(QMainWindow):
         self._selected_camera_id: str = "0"  # 当前选中的摄像头
         self._last_input_path = ""  # 最近一次的输入路径（用于视频回放）
         self._last_input_type = ""  # 最近一次的输入类型
+        self._pending_input_path = ""  # 预选时已经选择、可直接运行的输入路径
+        self._pending_input_type = ""
+        self._preselection: dict | None = None
 
         # 摄像头延迟扫描（仅在用户切到实时模式时才枚举，避免启动时噪声警告）
         self._available_cameras: list[CameraDevice] = []
@@ -105,6 +109,9 @@ class MainWindow(QMainWindow):
 
         # 信号连接
         self.control_bar.runRequested.connect(self.on_run)
+        self.control_bar.inputTypeChanged.connect(self._on_input_type_changed)
+        self.control_bar.preselectionRequested.connect(self._on_preselection_requested)
+        self.control_bar.preselectionCleared.connect(self._clear_preselection)
         self.control_bar.captureRequested.connect(self._on_capture_requested)
         self.control_bar.stopRealtimeRequested.connect(self._stop_realtime)
         self.control_bar.growthRequested.connect(self._on_growth_requested)
@@ -206,6 +213,72 @@ class MainWindow(QMainWindow):
     # ==================================================================
     # 一次性推理：视频 / 图片目录
     # ==================================================================
+    def _choose_input(self, input_type: str) -> str:
+        """选择一次性推理输入。"""
+        if input_type == "video":
+            path, _ = QFileDialog.getOpenFileName(self, "选择一个视频文件", "", _VIDEO_FILTER)
+            return path
+        return QFileDialog.getExistingDirectory(
+            self, "选择一个图片目录（目录内所有图片视为同一晶体）"
+        )
+
+    def _on_input_type_changed(self, input_type: str):
+        """输入类型改变后清除绑定在旧输入上的首帧预选。"""
+        if self._pending_input_type and self._pending_input_type != input_type:
+            self._clear_preselection()
+
+    def _on_preselection_requested(self):
+        """读取视频首帧/图片首张并弹出人工框选窗口。"""
+        if self._run_worker is not None and self._run_worker.isRunning():
+            return
+        input_type = self.control_bar.current_input_type()
+        if input_type == "realtime":
+            QMessageBox.information(
+                self,
+                "实时模式",
+                "实时摄像头预选将在摄像头预览就绪后支持，请先使用视频或图片模式。",
+            )
+            self.control_bar.set_preselection_state(False)
+            return
+
+        path = self._choose_input(input_type)
+        if not path:
+            self.control_bar.set_preselection_state(False)
+            return
+        try:
+            first = self.backend.load_first_input_frame(path, input_type)
+            roi = RoiSelectionDialog.get_roi(
+                first["image_bgr"], frame_name=first["name"], parent=self
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.control_bar.set_preselection_state(False)
+            QMessageBox.critical(self, "读取首帧失败", f"无法读取预选图像：\n{exc}")
+            return
+        if roi is None:
+            self.control_bar.set_preselection_state(False)
+            return
+
+        self._pending_input_path = path
+        self._pending_input_type = input_type
+        self._preselection = {
+            "enabled": True,
+            "roi_norm": list(roi),
+            "point_norm": None,
+            "source_frame": first["name"],
+            "image_size": list(first["image_size"]),
+        }
+        self.control_bar.set_preselection_state(True)
+        self.control_bar.set_status(
+            f"首帧预选已设置 · {first['name']} · 点击「选择并运行」开始分析"
+        )
+
+    def _clear_preselection(self):
+        """清除预选和与其绑定的输入路径，恢复自动定位。"""
+        self._preselection = None
+        self._pending_input_path = ""
+        self._pending_input_type = ""
+        self.control_bar.set_preselection_state(False)
+
     def on_run(self, input_type: str):
         """响应运行请求：按输入类型选择输入并启动后台推理。"""
         if self._run_worker is not None and self._run_worker.isRunning():
@@ -217,17 +290,27 @@ class MainWindow(QMainWindow):
 
         save = self.control_bar.save_results()
 
+        if (
+            self._preselection is not None
+            and self._pending_input_path
+            and self._pending_input_type == input_type
+        ):
+            path = self._pending_input_path
+        else:
+            path = self._choose_input(input_type)
+            if not path:
+                return
+
         if input_type == "video":
-            path, _ = QFileDialog.getOpenFileName(self, "选择一个视频文件", "", _VIDEO_FILTER)
-            if not path:
-                return
             options = {"num_frames": self.control_bar.num_frames(), "save": save}
-        else:  # image directory
-            path = QFileDialog.getExistingDirectory(
-                self, "选择一个图片目录（目录内所有图片视为同一晶体）")
-            if not path:
-                return
+        else:
             options = {"save": save}
+
+        if self._preselection is not None:
+            if self._pending_input_path != path or self._pending_input_type != input_type:
+                self._clear_preselection()
+            else:
+                options["preselection"] = dict(self._preselection)
 
         self._last_input_path = path
         self._last_input_type = input_type
