@@ -27,7 +27,7 @@ from .camera_parameters import CameraParameters, load_camera_calibration, undist
 from .edges import canny_edge_map, compute_edge_map
 from .geometry import build_vertices, compute_volume, edge_index_pairs
 from .io import VIDEO_EXTENSIONS, InputFrame, OutputLayout, _imwrite, iter_inputs
-from .localize import RoiResult, locate_crystal
+from .localize import RoiResult, _normalised_target_box, _normalised_target_point, locate_crystal
 from .logging_utils import log, section, warn
 from .metric import convert_pixel_to_metric
 from .preprocess import run_preprocess
@@ -233,7 +233,17 @@ def _process_frame(
             # 直接把它当作 SAM2 box prompt 会把掩膜锁在局部。只有用户明确给出
             # 固定目标框时才信任该框，默认继续使用质心点提示以保持基线稳定性。
             prompt_box = None
-            if cfg.localize.target_roi is not None:
+            if cfg.localize.preselection_enabled and cfg.localize.preselection_roi is not None:
+                manual_box = _normalised_target_box(cfg.localize.preselection_roi, w, h)
+                manual_point = _normalised_target_point(cfg.localize.preselection_point, w, h)
+                if manual_box is not None:
+                    prompt_box = (
+                        max(manual_box[0] - x1, 0), max(manual_box[1] - y1, 0),
+                        min(manual_box[2] - x1, x2 - x1), min(manual_box[3] - y1, y2 - y1),
+                    )
+                    if manual_point is not None:
+                        point = (manual_point[0] - x1, manual_point[1] - y1)
+            elif cfg.localize.target_roi is not None:
                 component_box = roi.component_bbox
                 prompt_box = (
                     max(component_box[0] - x1, 0), max(component_box[1] - y1, 0),
@@ -552,8 +562,11 @@ def run_stage1(
     input_file = Path(cfg.input_path).expanduser()
     tracking_active = bool(
         cfg.localize.tracking_enabled
-        and (cfg.localize.tracking_force
-             or (input_file.is_file() and input_file.suffix.lower() in VIDEO_EXTENSIONS))
+        and (
+            cfg.localize.preselection_enabled
+            or cfg.localize.tracking_force
+            or (input_file.is_file() and input_file.suffix.lower() in VIDEO_EXTENSIONS)
+        )
     )
     if cfg.localize.tracking_enabled and not tracking_active:
         log("图片目录默认逐帧定位；如需跨图跟踪请显式设置 target_tracking。")

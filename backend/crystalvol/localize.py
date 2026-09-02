@@ -128,6 +128,73 @@ def _normalised_target_box(
     )
 
 
+def _normalised_target_point(
+    point: Optional[Tuple[float, float]],
+    width: int,
+    height: int,
+) -> Optional[Tuple[int, int]]:
+    """把归一化点转成当前分辨率的像素坐标。"""
+    if point is None or len(point) != 2:
+        return None
+    try:
+        x, y = (float(value) for value in point)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite([x, y]).all():
+        return None
+    return (
+        int(round(float(np.clip(x, 0.0, 1.0)) * width)),
+        int(round(float(np.clip(y, 0.0, 1.0)) * height)),
+    )
+
+
+def _clip_box(
+    box: Tuple[int, int, int, int], width: int, height: int,
+) -> Tuple[int, int, int, int]:
+    """将像素框裁剪到图像边界。"""
+    x1, y1, x2, y2 = box
+    return (
+        max(0, min(int(x1), width - 1)),
+        max(0, min(int(y1), height - 1)),
+        max(1, min(int(x2), width)),
+        max(1, min(int(y2), height)),
+    )
+
+
+def _expand_box(
+    box: Tuple[int, int, int, int], margin: float, width: int, height: int,
+) -> Tuple[int, int, int, int]:
+    """按框宽高向四周扩展搜索窗口。"""
+    x1, y1, x2, y2 = box
+    bw = max(x2 - x1, 1)
+    bh = max(y2 - y1, 1)
+    pad_x = int(round(bw * max(float(margin), 0.0)))
+    pad_y = int(round(bh * max(float(margin), 0.0)))
+    return _clip_box((x1 - pad_x, y1 - pad_y, x2 + pad_x, y2 + pad_y), width, height)
+
+
+def _box_center(box: Tuple[int, int, int, int]) -> Tuple[float, float]:
+    return ((box[0] + box[2]) * 0.5, (box[1] + box[3]) * 0.5)
+
+
+def _box_center_inside(
+    box: Tuple[int, int, int, int], container: Tuple[int, int, int, int],
+) -> bool:
+    cx, cy = _box_center(box)
+    return container[0] <= cx <= container[2] and container[1] <= cy <= container[3]
+
+
+def _box_containment(
+    box: Tuple[int, int, int, int], container: Tuple[int, int, int, int],
+) -> float:
+    """返回 box 被 container 覆盖的面积比例。"""
+    ix1, iy1 = max(box[0], container[0]), max(box[1], container[1])
+    ix2, iy2 = min(box[2], container[2]), min(box[3], container[3])
+    intersection = max(ix2 - ix1, 0) * max(iy2 - iy1, 0)
+    area = max((box[2] - box[0]) * (box[3] - box[1]), 1)
+    return float(intersection / area)
+
+
 def _bbox_iou(first: Tuple[int, int, int, int], second: Tuple[int, int, int, int]) -> float:
     """计算两个 xyxy 框的 IoU。"""
     ix1, iy1 = max(first[0], second[0]), max(first[1], second[1])
@@ -171,6 +238,14 @@ def locate_crystal(
     target_box = _normalised_target_box(cfg.target_roi, w, h)
     if cfg.target_roi is not None and target_box is None:
         warnings.append("target_roi 配置无效，已忽略固定目标框。")
+    preselection_box = _normalised_target_box(cfg.preselection_roi, w, h)
+    manual_mode = bool(cfg.preselection_enabled and preselection_box is not None)
+    if cfg.preselection_enabled and preselection_box is None:
+        warnings.append("首帧预选框无效，已回退自动定位。")
+    search_box = (
+        _expand_box(preselection_box, cfg.preselection_search_margin, w, h)
+        if manual_mode else None
+    )
 
     saliency = compute_saliency(enhanced_bgr, edge_map, specular_mask, cfg)
     saliency_vis = (saliency * 255.0).astype(np.uint8)
@@ -203,6 +278,19 @@ def locate_crystal(
         area_ratio = float(stats[label, cv2.CC_STAT_AREA]) / image_area
         if area_ratio < cfg.min_blob_area_ratio:
             continue
+        # 预选模式只在锚点搜索窗口内接受候选，防止高光/黑条把目标带离晶体。
+        # 用候选中心而不是完全包含关系，允许透明晶体只产生局部显著边缘。
+        component_box = (
+            int(stats[label, cv2.CC_STAT_LEFT]),
+            int(stats[label, cv2.CC_STAT_TOP]),
+            int(stats[label, cv2.CC_STAT_LEFT] + stats[label, cv2.CC_STAT_WIDTH]),
+            int(stats[label, cv2.CC_STAT_TOP] + stats[label, cv2.CC_STAT_HEIGHT]),
+        )
+        if manual_mode and search_box is not None:
+            if not _box_center_inside(component_box, search_box) and _bbox_iou(component_box, search_box) < 0.02:
+                continue
+        if area_ratio > cfg.max_blob_area_ratio:
+            continue
         bw = float(stats[label, cv2.CC_STAT_WIDTH])
         bh = float(stats[label, cv2.CC_STAT_HEIGHT])
         if max(bw, bh) / max(min(bw, bh), 1.0) > cfg.max_aspect_ratio:   # 细长黑条/边框
@@ -214,12 +302,6 @@ def locate_crystal(
         # 面积项：大块加分（让大晶体的合并大块胜过角落零星反光），但用 sqrt 抑制过猛
         area_term = min(1.0, float(np.sqrt(area_ratio / 0.25)))
         score = comp_saliency * (0.4 + 0.6 * extent) * (0.5 + 0.5 * max(center_term, 0.0)) * (0.4 + 0.6 * area_term)
-        component_box = (
-            int(stats[label, cv2.CC_STAT_LEFT]),
-            int(stats[label, cv2.CC_STAT_TOP]),
-            int(stats[label, cv2.CC_STAT_LEFT] + bw),
-            int(stats[label, cv2.CC_STAT_TOP] + bh),
-        )
         candidate_records.append((label, float(score), component_box, float(area_ratio)))
 
     previous_box = None
@@ -232,6 +314,9 @@ def locate_crystal(
 
     scored_records: list[tuple[float, int, Tuple[int, int, int, int]]] = []
     tracked_records: list[tuple[int, float, Tuple[int, int, int, int], float, float]] = []
+    tracking_jump_ratio = (
+        cfg.preselection_max_jump_ratio if manual_mode else cfg.tracking_max_jump_ratio
+    )
     for label, base_score, component_box, area_ratio in candidate_records:
         spatial_score = 1.0
         if target_box is not None:
@@ -239,12 +324,22 @@ def locate_crystal(
             target_center = _center_similarity(component_box, target_box, w, h, 1.0)
             target_affinity = 0.7 * target_iou + 0.3 * target_center
             spatial_score *= 0.2 + 0.8 * target_affinity
+        if manual_mode and preselection_box is not None:
+            anchor_iou = _bbox_iou(component_box, preselection_box)
+            anchor_center = _center_similarity(
+                component_box, preselection_box, w, h,
+                max(cfg.preselection_max_jump_ratio * 2.0, 0.05),
+            )
+            anchor_containment = _box_containment(component_box, search_box or preselection_box)
+            anchor_affinity = 0.45 * anchor_iou + 0.25 * anchor_center + 0.30 * anchor_containment
+            # 硬门控已经由候选生成阶段完成，这里再用锚点亲和度做候选排序。
+            spatial_score *= 0.35 + 0.65 * anchor_affinity
         track_affinity = 0.0
         track_iou = 0.0
         if previous_box is not None:
             track_iou = _bbox_iou(component_box, previous_box)
             track_center = _center_similarity(
-                component_box, previous_box, w, h, cfg.tracking_max_jump_ratio
+                component_box, previous_box, w, h, tracking_jump_ratio
             )
             previous_area = max(float(previous_roi.area_ratio), 1e-6)
             area_similarity = float(np.exp(-abs(np.log(max(area_ratio, 1e-6) / previous_area))))
@@ -280,6 +375,14 @@ def locate_crystal(
         best_label, best_score, best_component_box = -1, -1.0, (0, 0, 0, 0)
 
     if best_label < 0:
+        if manual_mode and search_box is not None and preselection_box is not None:
+            warnings.append("预选搜索窗内未找到有效晶体块，保持锚定 ROI，禁止跳转到整图其他目标。")
+            x1, y1, x2, y2 = search_box
+            px, py = _box_center(preselection_box)
+            return RoiResult(
+                (x1, y1, x2, y2), (px, py), 0.0, "manual", 0.0, saliency_vis,
+                found=False, warnings=warnings, component_bbox=preselection_box,
+            )
         warnings.append("显著性定位未找到有效晶体块，回退整幅中心区域。")
         if target_box is not None:
             x1, y1, x2, y2 = target_box
@@ -301,19 +404,23 @@ def locate_crystal(
     area_ratio = float(stats[best_label, cv2.CC_STAT_AREA]) / image_area
     cx, cy = float(centroids[best_label][0]), float(centroids[best_label][1])
 
-    # 自适应 ROI：外扩 + 最小边限制
-    pad_x, pad_y = int(bw * cfg.roi_pad_ratio), int(bh * cfg.roi_pad_ratio)
-    x1, y1 = x - pad_x, y - pad_y
-    x2, y2 = x + bw + pad_x, y + bh + pad_y
-    min_side = int(short_side * cfg.min_roi_side_ratio)
-    if (x2 - x1) < min_side:
-        grow = (min_side - (x2 - x1)) // 2
-        x1, x2 = x1 - grow, x2 + grow
-    if (y2 - y1) < min_side:
-        grow = (min_side - (y2 - y1)) // 2
-        y1, y2 = y1 - grow, y2 + grow
-    x1, y1 = max(x1, 0), max(y1, 0)
-    x2, y2 = min(x2, w), min(y2, h)
+    if manual_mode and search_box is not None:
+        # 预选模式保持稳定的处理窗口，避免每帧由碎片候选重新裁剪而产生漂移。
+        x1, y1, x2, y2 = search_box
+    else:
+        # 自适应 ROI：外扩 + 最小边限制
+        pad_x, pad_y = int(bw * cfg.roi_pad_ratio), int(bh * cfg.roi_pad_ratio)
+        x1, y1 = x - pad_x, y - pad_y
+        x2, y2 = x + bw + pad_x, y + bh + pad_y
+        min_side = int(short_side * cfg.min_roi_side_ratio)
+        if (x2 - x1) < min_side:
+            grow = (min_side - (x2 - x1)) // 2
+            x1, x2 = x1 - grow, x2 + grow
+        if (y2 - y1) < min_side:
+            grow = (min_side - (y2 - y1)) // 2
+            y1, y2 = y1 - grow, y2 + grow
+        x1, y1 = max(x1, 0), max(y1, 0)
+        x2, y2 = min(x2, w), min(y2, h)
 
     scale = "small" if area_ratio < 0.02 else ("medium" if area_ratio < 0.15 else "large")
     return RoiResult((x1, y1, x2, y2), (cx, cy), float(min(best_score, 1.0)),

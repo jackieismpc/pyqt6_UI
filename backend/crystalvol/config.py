@@ -85,7 +85,7 @@ class LocalizeConfig:
     preselection_point: Optional[Tuple[float, float]] = None
     preselection_enabled: bool = False
     # 搜索窗口相对预选框的外扩比例。1.0 表示每个方向额外扩展一个预选框尺寸。
-    preselection_search_margin: float = 1.25
+    preselection_search_margin: float = 0.50
     # 预选模式下上一帧跟踪允许的中心跳变（相对整幅图对角线）。
     preselection_max_jump_ratio: float = 0.20
     # 连续视频或实时拍摄时，用上一帧的目标位置约束当前帧，避免跳到高光/遮挡条。
