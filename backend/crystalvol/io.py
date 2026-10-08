@@ -96,6 +96,7 @@ class InputFrame:
     image_bgr: np.ndarray | None
     source_path: str
     index: int
+    camera_id: str = "default"
 
 
 def _resize_max_side(image: np.ndarray, max_side: int) -> np.ndarray:

@@ -53,6 +53,7 @@ class MainWindow(QMainWindow):
         self._rt_worker = None       # 实时线程（防 GC）
         self._realtime = False       # 是否处于实时模式（实时时左面板为摄像头实时预览）
         self._selected_camera_id: str = "0"  # 当前选中的摄像头
+        self._active_camera_ids: list[str] = ["0"]
         self._last_input_path = ""  # 最近一次的输入路径（用于视频回放）
         self._last_input_type = ""  # 最近一次的输入类型
         self._pending_input_path = ""  # 预选时已经选择、可直接运行的输入路径
@@ -360,9 +361,11 @@ class MainWindow(QMainWindow):
         # 延迟扫描摄像头（仅在真正需要时才枚举设备）
         self._ensure_cameras_scanned()
 
-        # 检查是否有可用摄像头（使用控制栏最新选中的 ID）
-        cam_id = self.control_bar.current_camera_id()
+        # 检查是否有可用摄像头（使用控制栏最新选中的 1 或 2 个 ID）
+        camera_ids = self.control_bar.current_camera_ids()
+        cam_id = camera_ids[0]
         self._selected_camera_id = cam_id
+        self._active_camera_ids = camera_ids
         if not cam_id or not self._available_cameras:
             QMessageBox.warning(
                 self, "实时模式",
@@ -376,14 +379,18 @@ class MainWindow(QMainWindow):
         self.control_bar.set_realtime_active(True)
         self.control_bar.set_shot_counter(0, self.control_bar.target_shots())
         self.control_bar.set_capture_enabled(False)  # 摄像头就绪前不可拍
-        self.control_bar.set_status("正在打开摄像头…")
+        trigger_mode = self.control_bar.current_trigger_mode()
+        camera_label = "双相机" if len(camera_ids) == 2 else "单相机"
+        self.control_bar.set_status(f"正在打开{camera_label} · {trigger_mode}…")
         self.panel_raw.set_message("正在打开摄像头…")
-        self.panel_preprocess.set_message("等待拍摄…\n多角度拍摄同一晶体做增量联合估计")
+        self.panel_preprocess.set_message("等待拍摄…\n可使用单相机或双相机视图做增量联合估计")
         self.panel_geometry.set_message("等待拍摄…")
 
         self._rt_worker = RealtimeWorker(
             self.backend,
             camera_id=self._selected_camera_id,
+            camera_ids=camera_ids,
+            trigger_mode=trigger_mode,
             save=self.control_bar.save_results(),
         )
         self._rt_worker.previewFrame.connect(self._on_preview_frame)
@@ -409,14 +416,30 @@ class MainWindow(QMainWindow):
             return
         self._preview_busy = True
         try:
-            self.panel_raw.set_np_bgr(frame)
+            if isinstance(frame, dict):
+                left = frame.get("left")
+                right = frame.get("right")
+                if left is None or right is None:
+                    return
+                import cv2
+                if left.shape[0] != right.shape[0]:
+                    target_h = min(left.shape[0], right.shape[0])
+                    left = cv2.resize(left, (round(left.shape[1] * target_h / left.shape[0]), target_h))
+                    right = cv2.resize(right, (round(right.shape[1] * target_h / right.shape[0]), target_h))
+                preview = cv2.hconcat([left, right])
+                self.panel_raw.set_np_bgr(preview)
+            else:
+                self.panel_raw.set_np_bgr(frame)
         finally:
             self._preview_busy = False
 
     def _on_camera_opened(self, ok: bool):
         if ok:
             self.control_bar.set_capture_enabled(True)
-            self.control_bar.set_status("摄像头就绪 · 点击「拍摄」采集多视角照片")
+            mode = "双视图" if len(self._active_camera_ids) == 2 else "单视图"
+            trigger = self.control_bar.current_trigger_mode()
+            action = "点击「同步触发」" if trigger == "software" else "点击「拍摄」"
+            self.control_bar.set_status(f"{mode}相机就绪 · {action}采集")
         else:
             # 摄像头打开失败 — worker 随后会 emit stopped
             self.control_bar.set_status("摄像头打开失败，即将退出实时模式")
@@ -448,7 +471,8 @@ class MainWindow(QMainWindow):
         if count >= target:
             self.control_bar.set_status(f"已达目标 {count}/{target} 张 · 可继续拍摄或点「结束实时」")
         else:
-            self.control_bar.set_status(f"已并入第 {count} 张 · 联合模型已更新")
+            unit = "组双视图" if len(self._active_camera_ids) == 2 else "张"
+            self.control_bar.set_status(f"已并入第 {count} {unit} · 联合模型已更新")
 
     def _on_rt_error(self, message: str):
         self.control_bar.set_capture_enabled(True)
@@ -466,8 +490,8 @@ class MainWindow(QMainWindow):
         self._realtime = False
         self.control_bar.set_realtime_active(False)
         self.control_bar.set_run_enabled(True)
-        count = self.result.frame_count if self.result is not None else 0
-        self.control_bar.set_status(f"实时已结束 · 本次采集 {count} 张")
+        count = self.control_bar.shot_counter.text()
+        self.control_bar.set_status(f"实时已结束 · {count}")
         # 清理预览状态
         self._preview_busy = False
         # 恢复面板：如果有之前的结果就展示，否则显示空白

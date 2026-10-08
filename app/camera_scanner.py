@@ -8,8 +8,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 from .platform_utils import ensure_mvs_importable
 
@@ -27,6 +26,8 @@ class CameraDevice:
     fps: float = 0.0
     backend: str = ""        # OpenCV backend 名称或 SDK 标识
     is_sdk: bool = False     # 是否通过厂商 SDK 访问
+    serial_number: str = ""  # 厂商序列号；SDK 设备优先使用它做稳定标识
+    transport: str = ""      # USB3 / GigE / OpenCV
 
 
 def _scan_opencv_cameras(max_index: int = 8) -> list[CameraDevice]:
@@ -96,47 +97,20 @@ def _scan_hikrobot_cameras() -> list[CameraDevice]:
         logger.debug("MVS SDK 未安装或不兼容，跳过海康相机扫描")
         return devices
 
-    from MvCameraControl_class import (
-        MvCamera,
-        MV_CC_DEVICE_INFO,
-        MV_CC_DEVICE_INFO_LIST,
-        MV_GIGE_DEVICE,
-        MV_USB_DEVICE,
-    )
-    from ctypes import POINTER, cast
-
     try:
-        device_list = MV_CC_DEVICE_INFO_LIST()
-        ret = MvCamera.MV_CC_EnumDevices(
-            MV_GIGE_DEVICE | MV_USB_DEVICE, device_list
-        )
-        if ret != 0:
-            logger.debug("MVS 枚举设备失败: 0x%x", ret)
-            return devices
+        from .hikrobot_camera import enumerate_mvs_devices
 
-        for i in range(device_list.nDeviceNum):
-            mvcc_dev = cast(device_list.pDeviceInfo[i], POINTER(MV_CC_DEVICE_INFO)).contents
-            label = "海康工业相机"
-
-            # 读取设备型号名
-            try:
-                ch_model_name = mvcc_dev.SpecialInfo.stUsb3VInfo.chModelName
-            except Exception:
-                ch_model_name = mvcc_dev.SpecialInfo.stGigEInfo.chModelName
-
-            model_name = ""
-            for ch in ch_model_name:
-                if ch == 0:
-                    break
-                model_name += chr(ch)
-            if model_name:
-                label = f"海康 {model_name}"
-
+        for item in enumerate_mvs_devices():
+            label = f"海康 {item.model_name or '工业相机'}"
+            if item.serial_number:
+                label += f" · SN {item.serial_number}"
             devices.append(CameraDevice(
-                device_id=f"hikrobot:{i}",
+                device_id=item.device_id,
                 label=label,
                 is_sdk=True,
                 backend="MVS(Hikrobot)",
+                serial_number=item.serial_number,
+                transport=item.transport,
             ))
     except Exception as exc:
         logger.debug("海康相机扫描异常: %s", exc)

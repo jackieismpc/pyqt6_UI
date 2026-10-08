@@ -26,6 +26,7 @@ class FrameResult:
     roi_bbox: Optional[tuple] = None
     roi_anchor_bbox: Optional[tuple] = None
     roi_search_bbox: Optional[tuple] = None
+    camera_id: str = "default"
     # images 的键含义：
     #   'raw'      -> inputs/<name>.png              原始输入帧
     #   'enhanced' -> enhanced/<name>_enhanced.png    低光增强

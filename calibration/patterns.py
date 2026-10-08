@@ -110,6 +110,8 @@ class PatternDetection:
     image_points: np.ndarray
     debug_image: Optional[np.ndarray]
     debug_info: dict[str, Any]
+    # ChArUco 的点数可能因视角不同而不同，用 id 对齐左右相机观测。
+    point_ids: Optional[np.ndarray] = None
 
 
 def _dictionary(name: str):
@@ -366,4 +368,5 @@ def detect_pattern(
             ),
             "marker_corner_refinement": "none",
         },
+        point_ids=np.asarray(charuco_ids).reshape(-1).astype(np.int32),
     )

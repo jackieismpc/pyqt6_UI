@@ -76,6 +76,20 @@ Linux/macOS 首次使用时执行一次 `chmod +x start_offline.sh`；之后即�
 
 预选框只需要覆盖晶体并保留少量上下文，不等同于精确分割轮廓；最终轮廓仍由后端自动细化。再次点击「取消预选」即可恢复自动定位。预选结果会写入输出 JSON，并在叠加图中以青色显示人工锚点、黄色显示当前处理搜索窗。
 
+### 单相机/双相机实时采集
+
+进入「实时」后，界面可以选择相机 A、相机 B 和触发方式：
+
+- 只选择相机 A：单相机拍摄；
+- 同时选择相机 A/B：一次「同步触发」得到左右两张图，并作为一个双视图组加入拟合；
+- 「软件触发」会对两台海康相机分别调用 MVS 的 `TriggerSoftware`；
+- 「硬件触发」会配置两台相机的 Line 0，并等待外部触发脉冲；
+- 双相机运行时若存在 `params/camera_parameters_left.json` 和
+  `params/camera_parameters_right.json`，程序会分别使用左右内参去畸变。
+
+双视图实时会话复用现有的跨帧几何拟合，并在输出 JSON 中记录每帧的 `camera_id`。
+双目标定图采集、左右内参和相对位姿标定命令见 [calibration/README.md](calibration/README.md)。
+
 启动脚本会检查 Python 3.13、核心依赖、SAM2/PiDiNet/HED/YOLO 本地权重和相机参数文件。若权重显示为几百字节的文本指针，说明 LFS 没有拉取成功：运行 `git lfs pull`，或从已有机器复制 `backend/weights/` 下的四个真实权重文件。权重较大但属于模型资产，继续由 Git LFS 跟踪；原始视频、图片和结果不应放入 Git。
 
 ## 相机参数统一规则

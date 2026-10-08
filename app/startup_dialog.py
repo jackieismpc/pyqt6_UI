@@ -46,7 +46,7 @@ class StartupDialog(QDialog):
         # 描述
         desc = QLabel(
             "选择相机模式与外参组（标定板位姿）。\n"
-            "若晶体真实尺寸已知，启用「尺度锚点」输入一条真实边长即可自动校正。"
+            "双相机模式会在实时页面显示相机 A/B，并对一次触发得到的左右图像联合拟合。"
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("font-size: 12px; color: #86868b;")
@@ -59,9 +59,11 @@ class StartupDialog(QDialog):
         # 相机模式
         self._mode_combo = QComboBox()
         self._mode_combo.addItem("单目相机", "monocular")
+        self._mode_combo.addItem("双相机（双视图）", "stereo")
         self._mode_combo.setCurrentIndex(0)
         self._mode_combo.setToolTip(
-            "单目：单相机拍摄；深度由多视角、外参或尺度锚点增强"
+            "双相机内参默认使用 params/camera_parameters_left.json 和 "
+            "params/camera_parameters_right.json"
         )
         mode_widget = QWidget()
         mode_layout = QHBoxLayout(mode_widget)

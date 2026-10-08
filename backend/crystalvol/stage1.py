@@ -786,6 +786,7 @@ def finalize_stage1(cfg: Stage1Config, layout: OutputLayout,
         "frames": [
             {
                 "name": f.frame.name,
+                "camera_id": f.frame.camera_id,
                 "processing_image_size": list(f.image_size),
                 "backend": f.edge_backend,
                 "roi_bbox": list(f.roi.bbox),

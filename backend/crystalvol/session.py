@@ -39,7 +39,8 @@ class Stage1Session:
     """一个晶体的增量多视角会话。"""
 
     def __init__(self, output_dir: str, cfg: Optional[Stage1Config] = None,
-                 clean: bool = True) -> None:
+                 clean: bool = True,
+                 camera_calibrations: Optional[Dict[str, CameraParameters]] = None) -> None:
         self.cfg: Stage1Config = cfg or Stage1Config(
             input_path="realtime://camera", output_dir=output_dir, device="auto",
         )
@@ -50,6 +51,7 @@ class Stage1Session:
         self.segmenter: Optional[CrystalSegmenter] = build_segmenter(self.cfg)
         self.frame_outputs: List[FrameOutput] = []
         self.calibration: Optional[CameraParameters] = None
+        self.camera_calibrations: Dict[str, CameraParameters] = dict(camera_calibrations or {})
         if self.cfg.undistort:
             try:
                 self.calibration = load_camera_calibration(self.cfg.camera_parameters)
@@ -57,39 +59,52 @@ class Stage1Session:
             except Exception as exc:  # noqa: BLE001
                 warn(f"实时会话相机参数加载失败，跳过去畸变：{exc}")
         self.previous_roi = None
+        self.previous_rois: Dict[str, object] = {}
         self._total_count = 0
+        self._pair_count = 0
 
     @property
     def count(self) -> int:
         """已累积并成功处理的照片数。"""
         return self._total_count
 
-    def add_frame(self, image_bgr: np.ndarray, name: Optional[str] = None) -> Dict[str, object]:
-        """并入一张新照片，重新联合拟合，返回与 stage1 一致的 summary。
+    @property
+    def pair_count(self) -> int:
+        """已成功加入的双视图组数。单相机会话始终为 0。"""
+        return self._pair_count
 
-        参数：
-            image_bgr: 摄像头/文件读入的 BGR 图（np.ndarray）。
-            name:      帧名，缺省自动编号 frame_01/frame_02/...
-        返回：
-            summary dict —— 结构与 stage1_result.json 完全一致，可直接喂给前端。
-        """
+    def _append_frame(
+        self,
+        image_bgr: np.ndarray,
+        frame_name: str,
+        camera_id: str = "default",
+    ) -> None:
         if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
             raise ValueError("传入的图像为空，无法加入会话。")
 
         index = self._total_count
-        frame_name = name or f"frame_{index + 1:02d}"
         image = _resize_max_side(image_bgr, self.cfg.max_input_side)
-        frame = InputFrame(name=frame_name, image_bgr=image,
-                           source_path=f"realtime://{frame_name}", index=index)
-
+        frame = InputFrame(
+            name=frame_name,
+            image_bgr=image,
+            source_path=f"realtime://{frame_name}",
+            index=index,
+            camera_id=str(camera_id or "default"),
+        )
+        calibration = self.camera_calibrations.get(frame.camera_id, self.calibration)
+        previous_roi = self.previous_rois.get(frame.camera_id)
         out = _process_frame(
-            frame, self.cfg, self.segmenter,
-            previous_roi=self.previous_roi, calibration=self.calibration,
+            frame,
+            self.cfg,
+            self.segmenter,
+            previous_roi=previous_roi,
+            calibration=calibration,
         )
         write_frame_products(self.layout, out)
         from .stage1 import _release_frame_buffers
         _release_frame_buffers(out)
         self.frame_outputs.append(out)
+        self.previous_rois[frame.camera_id] = out.roi
         self.previous_roi = out.roi
         self._total_count += 1
         max_frames = max(int(self.cfg.max_session_frames), 1)
@@ -98,22 +113,67 @@ class Stage1Session:
             # 联合拟合，防止实时会话的 CPU/元数据成本无限增长。
             del self.frame_outputs[:-max_frames]
 
+    def _finalize(self) -> Dict[str, object]:
         summary = finalize_stage1(self.cfg, self.layout, self.frame_outputs)
-        log(f"实时增量：已并入第 {self.count} 张，联合体积 "
+        log(f"实时增量：已并入第 {self._total_count} 张图像，"
+            f"当前双视图组数={self._pair_count}，"
             f"volume_px3={summary['geometry_px']['volume_px3']:.3e}")
         return summary
+
+    def add_frame(
+        self,
+        image_bgr: np.ndarray,
+        name: Optional[str] = None,
+        camera_id: str = "default",
+    ) -> Dict[str, object]:
+        """并入一张新照片，重新联合拟合，返回与 stage1 一致的 summary。
+
+        参数：
+            image_bgr: 摄像头/文件读入的 BGR 图（np.ndarray）。
+            name:      帧名，缺省自动编号 frame_01/frame_02/...
+        返回：
+            summary dict —— 结构与 stage1_result.json 完全一致，可直接喂给前端。
+        """
+        index = self._total_count
+        frame_name = name or f"frame_{index + 1:02d}"
+        self._append_frame(image_bgr, frame_name, camera_id=camera_id)
+        return self._finalize()
+
+    def add_pair(
+        self,
+        left_bgr: np.ndarray,
+        right_bgr: np.ndarray,
+        pair_name: Optional[str] = None,
+        left_camera_id: str = "left",
+        right_camera_id: str = "right",
+    ) -> Dict[str, object]:
+        """把一次双相机触发得到的左右图像作为一个双视图组加入。"""
+        pair_index = self._pair_count + 1
+        prefix = pair_name or f"pair_{pair_index:04d}"
+        self._append_frame(left_bgr, f"{prefix}_left", camera_id=left_camera_id)
+        try:
+            self._append_frame(right_bgr, f"{prefix}_right", camera_id=right_camera_id)
+        except Exception:
+            # 左图已经写入产物，保留诊断信息；本次 pair 不计数，调用方会收到异常。
+            raise
+        self._pair_count += 1
+        return self._finalize()
 
     def reset(self, clean: bool = True) -> None:
         """清空累积帧（开始对一个新晶体建模）；分割器常驻不重建。"""
         self.frame_outputs.clear()
         self._total_count = 0
+        self._pair_count = 0
         self.previous_roi = None
+        self.previous_rois.clear()
         self.layout.prepare(clean=clean)
 
     def close(self) -> None:
         """结束会话并释放分割模型和历史元数据。"""
         self.frame_outputs.clear()
         self.previous_roi = None
+        self.previous_rois.clear()
+        self._pair_count = 0
         if self.segmenter is not None:
             self.segmenter.close()
             self.segmenter = None

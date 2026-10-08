@@ -119,14 +119,29 @@ class ControlBar(QWidget):
         layout.addWidget(self.btn_growth)
 
         # ---- 实时专用控件（默认隐藏，实时会话激活时显示）----
-        self.cam_label = QLabel("摄像头")
+        self.cam_label = QLabel("相机A")
         self.cam_label.setObjectName("panelSecondary")
         self.cam_combo = QComboBox()
         self.cam_combo.setMinimumWidth(180)
-        self.cam_combo.setToolTip("选择要使用的摄像头设备")
+        self.cam_combo.setToolTip("选择单相机或双相机的左/主相机")
         self.cam_combo.currentIndexChanged.connect(
             lambda: self.cameraChanged.emit(self.current_camera_id())
         )
+
+        self.cam_b_label = QLabel("相机B")
+        self.cam_b_label.setObjectName("panelSecondary")
+        self.cam_b_combo = QComboBox()
+        self.cam_b_combo.setMinimumWidth(180)
+        self.cam_b_combo.setToolTip("双相机模式选择右/辅相机；选择不启用则为单相机")
+
+        self.trigger_label = QLabel("触发")
+        self.trigger_label.setObjectName("panelSecondary")
+        self.trigger_combo = QComboBox()
+        self.trigger_combo.setMinimumWidth(112)
+        self.trigger_combo.addItem("连续预览", "continuous")
+        self.trigger_combo.addItem("软件触发", "software")
+        self.trigger_combo.addItem("硬件触发", "hardware")
+        self.trigger_combo.currentIndexChanged.connect(self._on_trigger_mode_changed)
 
         self.shots_label = QLabel("目标张数")
         self.shots_label.setObjectName("panelSecondary")
@@ -139,7 +154,8 @@ class ControlBar(QWidget):
         self.shot_counter = QLabel("已拍 0/5")
         self.shot_counter.setObjectName("panelSecondary")
         self.btn_stop_realtime = QPushButton("结束实时")
-        for w in (self.cam_label, self.cam_combo, self.shots_label, self.shots_spin,
+        for w in (self.cam_label, self.cam_combo, self.cam_b_label, self.cam_b_combo,
+                  self.trigger_label, self.trigger_combo, self.shots_label, self.shots_spin,
                   self.btn_capture, self.shot_counter, self.btn_stop_realtime):
             layout.addWidget(w)
 
@@ -175,6 +191,11 @@ class ControlBar(QWidget):
     def _on_run_clicked(self):
         self.runRequested.emit(self.current_input_type())
 
+    def _on_trigger_mode_changed(self, _index: int):
+        self.btn_capture.setText(
+            "同步触发" if self.current_trigger_mode() == "software" else "拍摄"
+        )
+
     def _on_preselection_toggled(self, checked: bool):
         if checked:
             self.preselectionRequested.emit()
@@ -208,21 +229,38 @@ class ControlBar(QWidget):
         """是否保存本次推理结果到 data/results/<日期-时间>/。"""
         return self.save_check.isChecked()
 
+    def current_trigger_mode(self) -> str:
+        """返回 continuous、software 或 hardware。"""
+        return str(self.trigger_combo.currentData() or "continuous")
+
     # ---- 状态设置 ----
     def _populate_cameras(self, cameras: list[CameraDevice] | None):
         """填充摄像头下拉列表。"""
         self.cam_combo.clear()
+        self.cam_b_combo.clear()
+        self.cam_b_combo.addItem("不启用第二相机", "")
         if not cameras:
             self.cam_combo.addItem("未检测到摄像头", "")
             self.cam_combo.setEnabled(False)
+            self.cam_b_combo.setEnabled(False)
             return
         for cam in cameras:
             self.cam_combo.addItem(cam.label, cam.device_id)
+            self.cam_b_combo.addItem(cam.label, cam.device_id)
         self.cam_combo.setEnabled(True)
+        self.cam_b_combo.setEnabled(True)
+        if self.cam_b_combo.count() > 2:
+            self.cam_b_combo.setCurrentIndex(2)
 
     def current_camera_id(self) -> str:
         """返回当前选中的摄像头 device_id。"""
         return self.cam_combo.currentData() or "0"
+
+    def current_camera_ids(self) -> list[str]:
+        """返回实时采集使用的 1 或 2 个设备 ID。"""
+        first = self.current_camera_id()
+        second = self.cam_b_combo.currentData() or ""
+        return [first, second] if second and second != first else [first]
 
     def set_status(self, text: str):
         """更新右侧状态标签文本。"""
@@ -242,7 +280,8 @@ class ControlBar(QWidget):
         else:
             self._sync_frame_visibility()
         # 实时控件
-        for w in (self.cam_label, self.cam_combo, self.shots_label, self.shots_spin,
+        for w in (self.cam_label, self.cam_combo, self.cam_b_label, self.cam_b_combo,
+                  self.trigger_label, self.trigger_combo, self.shots_label, self.shots_spin,
                   self.btn_capture, self.shot_counter, self.btn_stop_realtime):
             w.setVisible(active)
 

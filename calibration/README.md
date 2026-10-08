@@ -12,8 +12,10 @@ uv run python -m calibration <command> ...
 
 ```text
 board            生成打印用标定板图片和元数据
+capture          通过 MVS 软件/硬件触发采集单相机或双相机标定图
 intrinsics       从图片目录标定内参，并输出统一 JSON
 extrinsics       用内参对一张图片求外参，并输出统一 JSON
+stereo           使用左右同步标定图完成双目标定
 install-default  显式复制一份统一 JSON 到后端默认参数位置
 ```
 
@@ -23,7 +25,37 @@ install-default  显式复制一份统一 JSON 到后端默认参数位置
 uv run python -m calibration board -h
 uv run python -m calibration intrinsics -h
 uv run python -m calibration extrinsics -h
+uv run python -m calibration capture -h
+uv run python -m calibration stereo -h
 ```
+
+## 采集单相机/双相机标定图
+
+先关闭 MVS Viewer 等占用相机的程序。设备 ID 使用应用枚举到的稳定序列号，例如
+`hikrobot:DA8434226`。软件触发采集一张后会保存为 `0001.png`、`0002.png`……：
+
+```powershell
+uv run python -m calibration capture `
+  --camera-id hikrobot:DA8434226 `
+  --output data/calibration/camera_left `
+  --count 20 `
+  --trigger software
+```
+
+双相机采集时，左右目录使用相同文件名，后续 `stereo` 命令会按文件名配对：
+
+```powershell
+uv run python -m calibration capture `
+  --camera-id hikrobot:DA8434226 `
+  --right-camera-id hikrobot:DA8434222 `
+  --output data/calibration/left `
+  --right-output data/calibration/right `
+  --count 20 `
+  --trigger software
+```
+
+硬件触发采集时将 `--trigger software` 改为 `--trigger hardware`；程序不会再发送
+`TriggerSoftware`，而是等待 Line 0 外部脉冲后取帧。
 
 ## 1. 生成标定板
 
@@ -111,6 +143,30 @@ uv run python -m calibration intrinsics data/calibration/intrinsics \
   --output params/camera_parameters.json \
   --debug-dir data/calibration/intrinsics_debug
 ```
+
+双相机需要分别输出两份内参，例如：
+
+```powershell
+uv run python -m calibration intrinsics data/calibration/left `
+  --output params/camera_parameters_left.json
+uv run python -m calibration intrinsics data/calibration/right `
+  --output params/camera_parameters_right.json
+```
+
+左右相机内参完成后，再使用同名同步图像估计左相机到右相机的相对位姿：
+
+```powershell
+uv run python -m calibration stereo `
+  data/calibration/left data/calibration/right `
+  --left-parameters params/camera_parameters_left.json `
+  --right-parameters params/camera_parameters_right.json `
+  --output params/stereo_camera_parameters.json
+```
+
+双目标定输出会保存 `rotation_matrix_left_to_right`、
+`translation_vector_left_to_right`、重投影误差以及左右内参文件引用。实时双相机模式
+会自动查找 `params/camera_parameters_left.json`、
+`params/camera_parameters_right.json`，并分别对左右输入去畸变。
 
 如果已确认镜头标称焦距和相机像元尺寸，可以把物理信息作为初始值加入优化：
 

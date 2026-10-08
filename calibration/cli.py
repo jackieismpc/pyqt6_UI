@@ -13,6 +13,8 @@ from PIL import Image
 
 from .extrinsics import calibrate_extrinsic
 from .intrinsics import calibrate_intrinsics
+from .stereo import calibrate_stereo
+from .capture import capture_calibration_images
 from .patterns import (
     BoardSpec,
     PATTERN_TYPES,
@@ -161,6 +163,26 @@ def build_parser() -> argparse.ArgumentParser:
     extrinsics.add_argument("--output", default="params/camera_parameters_with_extrinsic.json", help="输出统一相机参数 JSON。")
     extrinsics.add_argument("--update-default", action="store_true", help="同时更新后端内置默认参数。")
 
+    stereo = sub.add_parser("stereo", help="使用左右同步标定图和两套内参完成双目标定。")
+    stereo.add_argument("left_dir", help="左相机标定图片目录。")
+    stereo.add_argument("right_dir", help="右相机标定图片目录。")
+    stereo.add_argument("--left-parameters", required=True, help="左相机内参 JSON。")
+    stereo.add_argument("--right-parameters", required=True, help="右相机内参 JSON。")
+    _add_board_args(stereo)
+    stereo.add_argument("--min-views", type=int, default=5, help="最少有效同步图像对。默认 5。")
+    stereo.add_argument("--debug-dir", default=None, help="保存左右检测调试图的目录。")
+    stereo.add_argument("--output", default="params/stereo_camera_parameters.json", help="输出双目标定 JSON。")
+
+    capture = sub.add_parser("capture", help="通过 MVS 软件/硬件触发采集标定图像。")
+    capture.add_argument("--camera-id", required=True, help="主相机 ID，例如 hikrobot:DA8434226。")
+    capture.add_argument("--right-camera-id", default=None, help="可选右相机 ID；提供后采集双目同名图片。")
+    capture.add_argument("--output", required=True, help="单相机输出目录，或双相机左图输出目录。")
+    capture.add_argument("--right-output", default=None, help="双相机右图输出目录。")
+    capture.add_argument("--count", type=int, default=20, help="采集组数，默认 20。")
+    capture.add_argument("--trigger", choices=["software", "hardware"], default="software", help="触发方式。")
+    capture.add_argument("--interval-ms", type=int, default=300, help="两组之间的间隔，默认 300 ms。")
+    capture.add_argument("--timeout-ms", type=int, default=3000, help="等待一帧的超时时间，默认 3000 ms。")
+
     install = sub.add_parser("install-default", help="显式更新后端内置默认相机参数。")
     install.add_argument("--parameters", required=True, help="要安装的统一相机参数 JSON。")
 
@@ -287,6 +309,46 @@ def main(argv: list[str] | None = None) -> int:
         payload = load_parameters(args.parameters)
         target = _install_default(payload)
         print(f"已更新后端默认参数: {target}")
+        return 0
+
+    if args.command == "stereo":
+        spec = _spec(args)
+        payload = calibrate_stereo(
+            args.left_dir,
+            args.right_dir,
+            args.left_parameters,
+            args.right_parameters,
+            spec,
+            args.output,
+            min_views=args.min_views,
+            debug_dir=args.debug_dir,
+        )
+        stereo_info = payload["stereo"]
+        print(f"有效同步标定对: {len(stereo_info['accepted_views'])}")
+        print(f"双目标定重投影误差: {stereo_info['reprojection_error_px']:.6f} px")
+        print(f"左到右平移 ({stereo_info['translation_unit']}): {stereo_info['translation_vector_left_to_right']}")
+        print(f"已保存: {Path(args.output).expanduser().resolve()}")
+        return 0
+
+    if args.command == "capture":
+        camera_ids = [args.camera_id]
+        output_dirs = [args.output]
+        if args.right_camera_id:
+            if not args.right_output:
+                raise ValueError("双相机采集必须同时提供 --right-output")
+            camera_ids.append(args.right_camera_id)
+            output_dirs.append(args.right_output)
+        captured = capture_calibration_images(
+            camera_ids,
+            output_dirs,
+            count=args.count,
+            trigger_mode=args.trigger,
+            interval_ms=args.interval_ms,
+            timeout_ms=args.timeout_ms,
+        )
+        print(f"已采集 {captured} 组标定图像")
+        for path in output_dirs:
+            print(f"输出目录: {Path(path).expanduser().resolve()}")
         return 0
 
     raise RuntimeError(f"未知命令: {args.command}")

@@ -66,6 +66,7 @@ class BackendCore:
         self._camera_config = camera_config or CameraConfig()
         self._camera_params = None
         self._realtime_previous_length_cm: float | None = None
+        self._realtime_pair_mode = False
         self._temporary_output_dirs: set[Path] = set()
 
     @staticmethod
@@ -197,6 +198,7 @@ class BackendCore:
                     if isinstance(frame_data.get("roi_anchor_bbox"), (list, tuple)) else None,
                     roi_search_bbox=tuple(frame_data["roi_search_bbox"])
                     if isinstance(frame_data.get("roi_search_bbox"), (list, tuple)) else None,
+                    camera_id=str(frame_data.get("camera_id", "default")),
                 )
             )
 
@@ -337,29 +339,114 @@ class BackendCore:
             "image_size": (int(width), int(height)),
         }
 
-    def start_realtime_session(self, save: bool = False) -> None:
+    @staticmethod
+    def _resolve_parameter_reference(reference: str | None, base_dir: Path | None = None) -> str | None:
+        if not reference:
+            return None
+        path = Path(reference).expanduser()
+        if not path.is_absolute() and base_dir is not None:
+            path = base_dir / path
+        return str(path.resolve())
+
+    def _dual_parameter_paths(self) -> tuple[str | None, str | None]:
+        """解析双相机左右内参；优先使用配置，其次读取双目标定文件引用。"""
+        left = self._camera_config.left_parameter_path
+        right = self._camera_config.right_parameter_path
+        stereo_path = self._camera_config.stereo_parameter_path
+        default_stereo = _PROJECT_ROOT / "params" / "stereo_camera_parameters.json"
+        if not stereo_path and default_stereo.is_file():
+            stereo_path = str(default_stereo)
+        if stereo_path and Path(stereo_path).is_file():
+            try:
+                payload = json.loads(Path(stereo_path).read_text(encoding="utf-8"))
+                stereo = payload.get("stereo", {})
+                base = Path(stereo_path).expanduser().resolve().parent
+                left = left or self._resolve_parameter_reference(stereo.get("left_parameters"), base)
+                right = right or self._resolve_parameter_reference(stereo.get("right_parameters"), base)
+            except (OSError, ValueError, TypeError) as exc:
+                logger.warning("读取双目标定文件引用失败：%s", exc)
+
+        project_params = _PROJECT_ROOT / "params"
+        left = left or (str(project_params / "camera_parameters_left.json")
+                        if (project_params / "camera_parameters_left.json").is_file() else None)
+        right = right or (str(project_params / "camera_parameters_right.json")
+                          if (project_params / "camera_parameters_right.json").is_file() else None)
+        return left, right
+
+    def start_realtime_session(
+        self,
+        save: bool = False,
+        camera_ids: list[str] | None = None,
+    ) -> None:
         _ensure_backend_importable()
         from crystalvol.config import Stage1Config  # noqa: WPS433
         from crystalvol.session import Stage1Session  # noqa: WPS433
 
         self._cleanup_temporary_outputs()
         output_dir = self._make_output_dir(save, "crystalvol_rt_")
+        ids = list(camera_ids or [])
+        self._camera_params = None
+        self._realtime_pair_mode = len(ids) >= 2
+        camera_calibrations = {}
+        if len(ids) >= 2:
+            left_path, right_path = self._dual_parameter_paths()
+            for camera_id, path in ((ids[0], left_path), (ids[1], right_path)):
+                if path:
+                    try:
+                        camera_calibrations[camera_id] = self._load_backend_camera_parameters(path)
+                    except Exception as exc:
+                        logger.warning("双相机 %s 内参加载失败，将跳过去畸变：%s", camera_id, exc)
+            if ids[0] in camera_calibrations:
+                self._camera_params = camera_calibrations[ids[0]]
+        elif self._camera_config.parameter_path:
+            try:
+                camera_calibrations[ids[0] if ids else "default"] = self._load_backend_camera_parameters(
+                    self._camera_config.parameter_path
+                )
+                self._camera_params = next(iter(camera_calibrations.values()))
+            except Exception:
+                logger.warning("单相机实时内参加载失败，将跳过去畸变", exc_info=True)
+
         session_config = Stage1Config(
             input_path="realtime://camera",
             output_dir=output_dir,
             clean_output=True,
-            camera_parameters=self._camera_config.parameter_path,
+            # 双相机由 camera_calibrations 按 camera_id 分发；避免把左内参误用于右图。
+            camera_parameters=(self._camera_config.parameter_path if not self._realtime_pair_mode else None),
             undistort=True,
         )
         self._session = Stage1Session(
-            output_dir=output_dir, cfg=session_config, clean=True
+            output_dir=output_dir,
+            cfg=session_config,
+            clean=True,
+            camera_calibrations=camera_calibrations,
         )
         self._realtime_previous_length_cm = None
 
-    def add_realtime_photo(self, image_bgr) -> Stage1Result:
+    def add_realtime_photo(self, image_bgr, camera_id: str = "default") -> Stage1Result:
         if self._session is None:
-            self.start_realtime_session()
-        summary = self._session.add_frame(image_bgr)
+            self.start_realtime_session(camera_ids=[camera_id])
+        summary = self._session.add_frame(image_bgr, camera_id=camera_id)
+        return self._result_from_realtime_summary(summary)
+
+    def add_realtime_pair(
+        self,
+        left_bgr,
+        right_bgr,
+        left_camera_id: str = "left",
+        right_camera_id: str = "right",
+    ) -> Stage1Result:
+        if self._session is None:
+            self.start_realtime_session(camera_ids=[left_camera_id, right_camera_id])
+        summary = self._session.add_pair(
+            left_bgr,
+            right_bgr,
+            left_camera_id=left_camera_id,
+            right_camera_id=right_camera_id,
+        )
+        return self._result_from_realtime_summary(summary)
+
+    def _result_from_realtime_summary(self, summary: dict) -> Stage1Result:
         result = self._load_result_dir(Path(summary["output_dir"]), data=summary)
         metric = self._compute_metric(
             result.aggregate_geometry,
@@ -376,7 +463,9 @@ class BackendCore:
         return result
 
     def realtime_count(self) -> int:
-        return self._session.count if self._session is not None else 0
+        if self._session is None:
+            return 0
+        return self._session.pair_count if self._realtime_pair_mode else self._session.count
 
     def end_realtime_session(self) -> None:
         if self._session is not None:
@@ -385,6 +474,7 @@ class BackendCore:
                 close()
         self._session = None
         self._realtime_previous_length_cm = None
+        self._realtime_pair_mode = False
 
     def close(self) -> None:
         """应用退出时释放实时会话和未保存的临时产物。"""

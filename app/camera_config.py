@@ -17,3 +17,6 @@ class CameraConfig:
     scale_anchor_value: Optional[float] = None
     scale_anchor_edge: str = "length"
     parameter_path: Optional[str] = None
+    left_parameter_path: Optional[str] = None
+    right_parameter_path: Optional[str] = None
+    stereo_parameter_path: Optional[str] = None
